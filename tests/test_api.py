@@ -41,3 +41,34 @@ def test_manager_api_creates_a_project_and_returns_only_public_fields(tmp_path) 
     assert response.status_code == 200
     assert response.json()["project_ref"].startswith("sp_")
     assert "python_interpreter_path" not in response.json()
+
+
+def test_manager_ready_does_not_require_a_project(tmp_path) -> None:
+    registry = ProjectRegistry(tmp_path / "projects.json")
+    app = FastAPI()
+    app.include_router(build_manager_router(registry, _Service(registry)))
+
+    with TestClient(app) as client:
+        response = client.get("/api/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready"}
+
+
+def test_manager_archives_project_by_legacy_sidebar_id(tmp_path) -> None:
+    registry = ProjectRegistry(tmp_path / "projects.json")
+    project = registry.create(
+        name="Scoped silicon",
+        aiida_profile="dev",
+        python_interpreter_path="/opt/aiida/bin/python",
+        group_uuid="67b39b4d-9684-4d4e-ae85-123456789abc",
+        group_label="silicon",
+    )
+    app = FastAPI()
+    app.include_router(build_manager_router(registry, _Service(registry)))
+
+    with TestClient(app) as client:
+        response = client.delete(f"/api/projects/{project.id}")
+
+    assert response.status_code == 200
+    assert response.json()["archived"] is True

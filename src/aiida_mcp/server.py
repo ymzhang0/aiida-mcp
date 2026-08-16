@@ -21,7 +21,7 @@ def default_worker_source() -> Path:
     configured = os.environ.get("AIIDA_MCP_WORKER_SOURCE")
     if configured:
         return Path(configured).expanduser()
-    return Path(__file__).resolve().parents[4] / "aiida-worker"
+    return Path(__file__).resolve().parents[3] / "aiida-worker"
 
 
 def create_app(
@@ -41,7 +41,7 @@ def create_app(
         finally:
             await runtime_pool.stop()
 
-    app = FastAPI(title="AiiDA MCP", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="AiiDA Manager", version="0.1.0", lifespan=lifespan)
     app.state.project_registry = project_registry
     app.state.aiida_service = service
     app.include_router(build_manager_router(project_registry, service))
@@ -67,6 +67,15 @@ def create_app(
 
 
 def main() -> None:
+    """Run either the local Manager daemon or the Plugin stdio server."""
+    if os.environ.get("AIIDA_MCP_TRANSPORT", "").strip().lower() == "stdio":
+        project_registry = ProjectRegistry()
+        runtime_pool = WorkerRuntimePool(worker_source=default_worker_source())
+        # A local Plugin owns this process, so no HTTP listener or tunnel is
+        # involved. FastMCP keeps stdout reserved for JSON-RPC messages.
+        build_mcp_server(AiiDAService(project_registry, runtime_pool)).run(transport="stdio")
+        return
+
     uvicorn.run(
         create_app(),
         host=os.environ.get("AIIDA_MCP_HOST", "127.0.0.1"),

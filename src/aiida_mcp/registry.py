@@ -94,7 +94,10 @@ class ProjectRegistry:
 
     def get(self, project_ref: str) -> AiiDAProject | None:
         cleaned = str(project_ref or "").strip()
-        return next((item for item in self._read() if item.project_ref == cleaned), None)
+        return next(
+            (item for item in self._read() if item.project_ref == cleaned or item.id == cleaned),
+            None,
+        )
 
     def create(
         self,
@@ -147,7 +150,7 @@ class ProjectRegistry:
         updated: list[AiiDAProject] = []
         target: AiiDAProject | None = None
         for project in projects:
-            if project.project_ref != cleaned:
+            if project.project_ref != cleaned and project.id != cleaned:
                 updated.append(project)
                 continue
             target = AiiDAProject(**{**asdict(project), "archived": True, "updated_at": _now()})

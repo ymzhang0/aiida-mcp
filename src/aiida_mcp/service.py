@@ -43,6 +43,29 @@ class AiiDAService:
     async def system_info(self, project_ref: str) -> dict[str, Any]:
         return await self._call(self.project(project_ref), "system.info")
 
+    async def database_summary(self, project_ref: str) -> dict[str, Any]:
+        return await self._call(self.project(project_ref), "system.database_summary")
+
+    async def group_inspect(self, project_ref: str, *, limit: int = 500) -> dict[str, Any]:
+        project = self.project(project_ref)
+        return await self._call(
+            project, "group.inspect_uuid", {"group_uuid": project.group_uuid, "limit": max(1, min(int(limit), 500))}
+        )
+
+    async def node_detail(self, project_ref: str, identifier: str) -> dict[str, Any]:
+        project = self.project(project_ref)
+        await self._assert_group_member(project, identifier)
+        return await self._call(project, "node.summary", {"pk": int(identifier)})
+
+    async def process_logs(self, project_ref: str, identifier: str) -> dict[str, Any]:
+        project = self.project(project_ref)
+        await self._assert_group_member(project, identifier)
+        return await self._call(project, "process.logs", {"identifier": str(identifier)})
+
+    async def process_workgraph(self, project_ref: str, identifier: str) -> dict[str, Any]:
+        project = self.project(project_ref)
+        await self._assert_group_member(project, identifier)
+        return await self._call(project, "process.workgraph", {"identifier": str(identifier)})
     async def recent_nodes(
         self,
         project_ref: str,
@@ -68,20 +91,7 @@ class AiiDAService:
         cleaned = str(identifier or "").strip()
         if not cleaned:
             raise ValueError("Process identifier is required")
-        # Verify membership before fetching details.  The Manager can inspect
-        # global DB state through a separate administrative route; ChatGPT may
-        # only see the bound scientific project.
-        members = await self._call(
-            project, "group.inspect_uuid", {"group_uuid": project.group_uuid, "limit": 500}
-        )
-        nodes = members.get("nodes") if isinstance(members, dict) else []
-        allowed = {
-            str(item.get(field))
-            for item in nodes if isinstance(item, dict)
-            for field in ("pk", "uuid") if item.get(field) is not None
-        }
-        if cleaned not in allowed:
-            raise ProjectScopeError("Process is not a member of this AiiDA project")
+        await self._assert_group_member(project, cleaned)
         return await self._call(project, "process.detail", {"identifier": cleaned})
 
     async def workflow_catalog(self, project_ref: str) -> dict[str, Any]:
@@ -109,6 +119,16 @@ class AiiDAService:
             raise ValueError("Submission draft is required")
         return await self._call(self.project(project_ref), "submission.validate", {"draft": draft})
 
+    async def _assert_group_member(self, project: AiiDAProject, identifier: str) -> None:
+        members = await self._call(project, "group.inspect_uuid", {"group_uuid": project.group_uuid, "limit": 500})
+        nodes = members.get("nodes") if isinstance(members, dict) else []
+        allowed = {
+            str(item.get(field))
+            for item in nodes if isinstance(item, dict)
+            for field in ("pk", "uuid") if item.get(field) is not None
+        }
+        if str(identifier) not in allowed:
+            raise ProjectScopeError("Record is not a member of this AiiDA project")
     async def _call(self, project: AiiDAProject, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         runtime = ProjectRuntime(
             project_id=project.id,
