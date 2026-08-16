@@ -38,6 +38,7 @@ def test_manager_root_serves_the_chatgpt_style_desktop_layout(tmp_path) -> None:
     assert 'class="sidebar"' in response.text
     assert 'id="inspector"' in response.text
     assert 'Recent activity' in response.text
+    assert 'name="workspace_path"' in response.text
 
 def test_stdio_transport_runs_the_plugin_server(monkeypatch) -> None:
     calls: list[str] = []
