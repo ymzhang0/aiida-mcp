@@ -120,14 +120,12 @@ class AiiDAService:
         return await self._call(self.project(project_ref), "submission.validate", {"draft": draft})
 
     async def _assert_group_member(self, project: AiiDAProject, identifier: str) -> None:
-        members = await self._call(project, "group.inspect_uuid", {"group_uuid": project.group_uuid, "limit": 500})
-        nodes = members.get("nodes") if isinstance(members, dict) else []
-        allowed = {
-            str(item.get(field))
-            for item in nodes if isinstance(item, dict)
-            for field in ("pk", "uuid") if item.get(field) is not None
-        }
-        if str(identifier) not in allowed:
+        result = await self._call(
+            project,
+            "group.contains_node",
+            {"group_uuid": project.group_uuid, "identifier": str(identifier)},
+        )
+        if not result.get("member"):
             raise ProjectScopeError("Record is not a member of this AiiDA project")
     async def _call(self, project: AiiDAProject, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         runtime = ProjectRuntime(
