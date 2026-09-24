@@ -1,4 +1,4 @@
-"""One stdio JSON-RPC AiiDA worker per explicit project runtime identity."""
+"""One stdio JSON-RPC AiiDA worker per explicit runtime identity."""
 
 from __future__ import annotations
 
@@ -23,19 +23,18 @@ class WorkerRuntimeError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class ProjectRuntime:
-    project_id: str
+class Runtime:
+    runtime_id: str
     python_interpreter_path: str
     aiida_profile: str
     workspace_path: str | None = None
 
     @property
     def key(self) -> tuple[str, str, str]:
-        return (self.project_id, self.python_interpreter_path, self.aiida_profile)
+        return (self.runtime_id, self.python_interpreter_path, self.aiida_profile)
 
     def context(self) -> dict[str, str]:
         value = {
-            "project_id": self.project_id,
             "python_interpreter_path": self.python_interpreter_path,
             "profile_name": self.aiida_profile,
         }
@@ -45,17 +44,16 @@ class ProjectRuntime:
 
 
 class WorkerRuntimePool:
-    """Shared owner of project workers; no HTTP is ever added to aiida-worker."""
+    """Own private stdio workers; no worker HTTP service exists."""
 
-    def __init__(self, *, worker_source: Path | str, request_timeout: float = 60.0) -> None:
-        self.worker_source = Path(worker_source).expanduser().resolve()
+    def __init__(self, *, request_timeout: float = 60.0) -> None:
         self.request_timeout = max(0.2, float(request_timeout))
         self._workers: dict[tuple[str, str, str], _WorkerProcess] = {}
         self._lock = asyncio.Lock()
 
     async def request(
         self,
-        runtime: ProjectRuntime,
+        runtime: Runtime,
         method: str,
         params: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -67,20 +65,19 @@ class WorkerRuntimePool:
         self._workers.clear()
         await asyncio.gather(*(worker.stop() for worker in workers), return_exceptions=True)
 
-    async def _worker_for(self, runtime: ProjectRuntime) -> "_WorkerProcess":
+    async def _worker_for(self, runtime: Runtime) -> "_WorkerProcess":
         async with self._lock:
             worker = self._workers.get(runtime.key)
             if worker is not None:
                 return worker
             interpreter = Path(runtime.python_interpreter_path).expanduser()
-            worker_package = self.worker_source / "src" / "aris_aiida_worker"
             bootstrap = Path(__file__).with_name("worker_bootstrap.py")
             if not interpreter.is_file() or not os.access(interpreter, os.X_OK):
                 raise WorkerRuntimeError("Project Python interpreter is unavailable", status_code=404)
-            if not worker_package.is_dir() or not bootstrap.is_file():
-                raise WorkerRuntimeError("Bundled aiida-worker source is unavailable")
+            if not bootstrap.is_file():
+                raise WorkerRuntimeError("Bundled worker bootstrap is unavailable")
             worker = _WorkerProcess(
-                command=[str(interpreter), "-u", str(bootstrap), str(self.worker_source)],
+                command=[str(interpreter), "-u", str(bootstrap)],
                 cwd=runtime.workspace_path,
                 env={"AIIDA_PROFILE": runtime.aiida_profile},
                 request_timeout=self.request_timeout,

@@ -1,7 +1,7 @@
 [project]
 name = "aiida-mcp"
 version = "0.1.0"
-description = "Project-scoped AiiDA MCP plugin backend and Manager control plane."
+description = "Generic read-only AiiDA MCP runtime interface."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
@@ -17,6 +17,7 @@ dev = ["pytest>=8.0", "httpx>=0.28.0"]
 [project.scripts]
 aiida-mcp = "aiida_mcp.server:main"
 
+aris-aiida-mcp-http = "aiida_mcp.aris:main"
 [build-system]
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"

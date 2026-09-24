@@ -1,6 +1,4 @@
-"""Independent control plane for the AiiDA ChatGPT plugin and Manager."""
-
-from .registry import AiiDAProject, ProjectRegistry
-from .runtime import ProjectRuntime, WorkerRuntimePool
-
-__all__ = ["AiiDAProject", "ProjectRegistry", "ProjectRuntime", "WorkerRuntimePool"]
+"""Generic MCP runtime package."""
+from .runtime import Runtime, WorkerRuntimePool
+from .service import AiiDAService, RuntimeConfig
+__all__ = ["AiiDAService", "Runtime", "RuntimeConfig", "WorkerRuntimePool"]

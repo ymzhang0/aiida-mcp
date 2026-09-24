@@ -1,26 +1,39 @@
 # AiiDA MCP
 
-`aiida-mcp` is the shared control plane for the AiiDA ChatGPT plugin and the
-AiiDA Manager.  It owns project bindings and worker lifecycles; it never adds
-an HTTP listener to `aiida-worker`, which remains a stdio JSON-RPC process.
+`aiida-mcp` is a generic, read-only AiiDA runtime interface for AI/MCP clients.
+It has no project registry, `project_ref`, campaign, Group-scope policy, or
+Manager web page.
 
-## Run locally
+Start one instance for one human-selected runtime:
 
 ```bash
-uv run --project . aiida-mcp
+AIIDA_MCP_PYTHON=/path/to/project/.venv/bin/python \
+AIIDA_MCP_PROFILE=silicon \
+AIIDA_MCP_WORKSPACE=/path/to/project \
+uv run aiida-mcp serve
 ```
 
-The daemon binds to `127.0.0.1:8043` by default:
+The selected Python and profile are fixed when the server starts; tools cannot
+supply either value. The server listens at `127.0.0.1:8043` by default.
 
-- `http://127.0.0.1:8043/` is the local AiiDA Manager console.`n- `http://127.0.0.1:8043/api/projects` is its project API.
-- `http://127.0.0.1:8043/mcp` is the ChatGPT Plugin's streamable MCP endpoint.
+- `/mcp` provides generic read-only MCP tools.
+- `/api` provides the matching local generic transport for `aiida-project`.
 
-Set `AIIDA_MCP_TOKEN` before exposing `/mcp` through a tunnel.  The token is a
-development guard only; production deployment must replace it with OAuth and
-project-level authorization.
+The private `aiida_mcp.worker` subprocess executes in the selected Python
+environment and is the only code that imports AiiDA or queries its ORM.
 
-Create an AiiDA Project from the Manager first.  Its immutable `project_ref`
-is the value placed in the ChatGPT Project instructions and passed to every
-MCP tool.  A project binds an AiiDA profile, interpreter and AiiDA Group UUID;
-the Group label is only used until the worker's group-query protocol receives
-native UUID filtering.
+Project scope belongs to `aiida-project`, which reads `project.yaml`, resolves
+its declared Group policy, and calls this generic runtime. The Manager UI is
+owned by `aiida-manager`.
+
+`process.workgraph` is the process-structure API. It returns the actual call
+graph; there is deliberately no `process.tree` alias.
+
+The generic read-only surface also includes direct Node/Link and bounded
+provenance traversal. `node.compare` is implemented inside the worker: it
+recursively compares attributes, ports, links, arrays, and repository content
+without importing `aiida-analyser`.
+
+`archive.inspect` reads a native AiiDA archive without importing it. Its path
+must be relative to the configured workspace, so it cannot become an arbitrary
+local-file reader.

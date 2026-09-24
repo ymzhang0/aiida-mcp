@@ -1,15 +1,15 @@
-# Vibe research quickstart
+# AiiDA MCP quickstart
 
-This first implementation runs one `aiida-mcp` daemon for both surfaces.
+Start one local generic runtime for a human-selected Python environment and AiiDA profile:
 
 ```bash
-cd /home/yzhang/project/aiida-llm
-PYTHONPATH=aiida-mcp/src aris/.venv/bin/python -m aiida_mcp.launch
+AIIDA_MCP_PYTHON=/path/to/project/.venv/bin/python \
+AIIDA_MCP_PROFILE=silicon \
+AIIDA_MCP_WORKSPACE=/path/to/project \
+uv run aiida-mcp serve
 ```
 
-The AiiDA Manager console is served by the same daemon at `http://127.0.0.1:8043/`; its API is under `/api`.
-The ChatGPT Plugin endpoint is `http://127.0.0.1:8043/mcp`; expose only this
-route using a secure tunnel and configure `AIIDA_MCP_TOKEN` before doing so.
-
-Create the scientific project through `POST /api/projects` first.  The result
-contains the `project_ref` that the plugin passes for every AiiDA tool call.
+The local API is `http://127.0.0.1:8043/api`; the read-only MCP endpoint is
+`http://127.0.0.1:8043/mcp`. It has no Manager UI, project registry or
+`project_ref` parameter. Use `aiida-project manager-serve` for a scoped project
+view and `aiida-manager` only for the desktop shell.

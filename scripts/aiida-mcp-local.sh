@@ -11,9 +11,12 @@ PYTHON_BIN="${AIIDA_MCP_SERVER_PYTHON:-${MCP_DIR}/.venv/bin/python}"
 
 is_ready() { curl --silent --fail --max-time 2 "${URL}/api/ready" >/dev/null 2>&1; }
 start() {
-  if is_ready; then echo "AiiDA Manager is ready at ${URL}"; return; fi
+  if [[ -z "${AIIDA_MCP_PYTHON:-}" || -z "${AIIDA_MCP_PROFILE:-}" ]]; then
+    echo "Set AIIDA_MCP_PYTHON and AIIDA_MCP_PROFILE before starting aiida-mcp." >&2; exit 2
+  fi
+  if is_ready; then echo "AiiDA MCP is ready at ${URL}"; return; fi
   if curl --silent --max-time 2 "${URL}/" >/dev/null 2>&1; then
-    echo "Port ${PORT} is occupied by an older or unrelated local service. Stop it, then launch AiiDA Manager again." >&2
+    echo "Port ${PORT} is occupied by an older or unrelated local service. Stop it, then launch AiiDA MCP again." >&2
     exit 1
   fi
   if [[ ! -x "${PYTHON_BIN}" ]]; then echo "Missing ${PYTHON_BIN}. Run: (cd ${MCP_DIR} && uv sync)" >&2; exit 1; fi
@@ -21,10 +24,10 @@ start() {
     nohup "${PYTHON_BIN}" -m aiida_mcp.server >"${LOG_FILE}" 2>&1 &
   echo "$!" >"${PID_FILE}"
   for _ in {1..30}; do
-    if is_ready; then echo "AiiDA Manager is ready at ${URL}"; return; fi
+    if is_ready; then echo "AiiDA MCP is ready at ${URL}"; return; fi
     sleep 1
   done
-  echo "AiiDA Manager did not start. See ${LOG_FILE}" >&2; exit 1
+  echo "AiiDA MCP did not start. See ${LOG_FILE}" >&2; exit 1
 }
 stop() {
   if [[ -f "${PID_FILE}" ]]; then

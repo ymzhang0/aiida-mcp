@@ -1,110 +1,41 @@
-"""Safe ChatGPT plugin tool surface for a project-scoped AiiDA service."""
-
+"""Read-only generic MCP tools for one explicitly configured AiiDA runtime."""
 from __future__ import annotations
-
-from typing import Any, Literal
-
+from typing import Any
 from fastmcp import FastMCP
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
 from .service import AiiDAService
 
-
-_READ_ONLY = {
-    "readOnlyHint": True,
-    "destructiveHint": False,
-    "idempotentHint": True,
-    "openWorldHint": False,
-}
-_PREVIEW = {**_READ_ONLY, "readOnlyHint": False}
-
-
-class SubmissionPreviewRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    mode: Literal["single", "batch"]
-    builder_strategy: Literal["protocol", "explicit_inputs"] = "protocol"
-    workchain: str = Field(min_length=1)
-    code: str | None = Field(default=None, min_length=1)
-    protocol: str = Field(default="moderate", min_length=1)
-    structure_pk: int | None = Field(default=None, gt=0)
-    structure_pks: list[int] = Field(default_factory=list)
-    overrides: dict[str, Any] = Field(default_factory=dict)
-    protocol_kwargs: dict[str, Any] = Field(default_factory=dict)
-    parameter_grid: dict[str, Any] = Field(default_factory=dict)
-    matrix_mode: Literal["product", "zip"] = "product"
-    inputs: dict[str, Any] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def validate_topology(self) -> "SubmissionPreviewRequest":
-        if self.builder_strategy == "explicit_inputs":
-            if not self.inputs:
-                raise ValueError("explicit_inputs strategy requires inputs")
-            return self
-        if not self.code:
-            raise ValueError("protocol strategy requires code")
-        if self.mode == "single" and self.structure_pk is None:
-            raise ValueError("single mode requires structure_pk")
-        if self.mode == "batch" and not self.structure_pks:
-            raise ValueError("batch mode requires structure_pks")
-        return self
-
+_READ_ONLY = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}
 
 def build_mcp_server(service: AiiDAService) -> FastMCP:
-    server = FastMCP(
-        "aiida",
-        instructions=(
-            "AiiDA scientific research plugin. Always use an explicit project_ref. "
-            "Read project data first, then create and validate structured submission previews. "
-            "This plugin never launches calculations."
-        ),
-    )
-
-    @server.tool(name="aiida_list_projects", description="List AiiDA projects available to this plugin.", annotations=_READ_ONLY)
-    async def list_projects() -> dict[str, Any]:
-        return {"projects": service.list_projects()}
-
-    @server.tool(name="aiida_project_status", description="Read the selected AiiDA project's worker and profile status.", annotations=_READ_ONLY)
-    async def project_status(project_ref: str) -> dict[str, Any]:
-        return await service.status(project_ref)
-
-    @server.tool(name="aiida_recent_processes", description="List recent AiiDA processes belonging to one project.", annotations=_READ_ONLY)
-    async def recent_processes(project_ref: str, limit: int = 50) -> dict[str, Any]:
-        return await service.recent_processes(project_ref, limit=limit)
-
-    @server.tool(name="aiida_recent_nodes", description="List recent AiiDA nodes belonging to one project.", annotations=_READ_ONLY)
-    async def recent_nodes(project_ref: str, limit: int = 50, node_type: str | None = None) -> dict[str, Any]:
-        return await service.recent_nodes(project_ref, limit=limit, node_type=node_type)
-
-    @server.tool(name="aiida_inspect_process", description="Inspect a process that belongs to the explicit AiiDA project.", annotations=_READ_ONLY)
-    async def inspect_process(project_ref: str, identifier: str) -> dict[str, Any]:
-        return await service.inspect_process(project_ref, identifier)
-
-    @server.tool(name="aiida_resources", description="Read configured AiiDA computers and codes.", annotations=_READ_ONLY)
-    async def resources(project_ref: str) -> dict[str, Any]:
-        return await service.resources(project_ref)
-
-    @server.tool(name="aiida_workflow_catalog", description="List WorkChains installed for the project runtime.", annotations=_READ_ONLY)
-    async def workflow_catalog(project_ref: str) -> dict[str, Any]:
-        return await service.workflow_catalog(project_ref)
-
-    @server.tool(name="aiida_input_candidates", description="Find stored inputs compatible with a WorkChain port.", annotations=_READ_ONLY)
-    async def input_candidates(project_ref: str, workchain: str, port_path: str, limit: int = 50) -> dict[str, Any]:
-        return await service.input_candidates(project_ref, workchain=workchain, port_path=port_path, limit=limit)
-
-    @server.tool(name="aiida_submission_spec", description="Read structured inputs for one WorkChain.", annotations=_READ_ONLY)
-    async def submission_spec(project_ref: str, workchain: str) -> dict[str, Any]:
-        return await service.submission_spec(project_ref, workchain=workchain)
-
-    @server.tool(name="aiida_build_submission_preview", description="Build but never submit a structured AiiDA calculation preview.", annotations=_PREVIEW)
-    async def build_submission_preview(project_ref: str, request: SubmissionPreviewRequest) -> dict[str, Any]:
-        return await service.build_submission_preview(project_ref, request.model_dump(mode="json"))
-
-    @server.tool(name="aiida_validate_submission_preview", description="Validate a preview without launching a calculation.", annotations=_PREVIEW)
-    async def validate_submission_preview(project_ref: str, draft: dict[str, Any]) -> dict[str, Any]:
-        return await service.validate_submission_preview(project_ref, draft)
-
+    server = FastMCP("aiida", instructions="Read-only generic AiiDA tools for the runtime selected when this server started. These tools do not know projects, campaigns, or scope Groups.")
+    @server.tool(name="aiida_runtime_status", description="Read the configured AiiDA runtime status.", annotations=_READ_ONLY)
+    async def runtime_status() -> dict[str, Any]: return await service.status()
+    @server.tool(name="aiida_node_search", description="List recent nodes in the configured runtime.", annotations=_READ_ONLY)
+    async def node_search(limit: int = 50, node_type: str | None = None) -> dict[str, Any]: return await service.nodes(limit=limit, node_type=node_type)
+    @server.tool(name="aiida_node_get", description="Read a node by PK.", annotations=_READ_ONLY)
+    async def node_get(pk: int) -> dict[str, Any]: return await service.node_get(pk)
+    @server.tool(name="aiida_node_links", description="Read direct AiiDA links for a node UUID or PK.", annotations=_READ_ONLY)
+    async def node_links(identifier: str) -> dict[str, Any]: return await service.node_links(identifier)
+    @server.tool(name="aiida_node_compare", description="Compare two AiiDA nodes recursively by attributes, ports, links, arrays, and repository content.", annotations=_READ_ONLY)
+    async def node_compare(left: str, right: str, depth: int = 2, max_differences: int = 100) -> dict[str, Any]: return await service.node_compare(left, right, depth=depth, max_differences=max_differences)
+    @server.tool(name="aiida_process_get", description="Read a process by identifier.", annotations=_READ_ONLY)
+    async def process_get(identifier: str) -> dict[str, Any]: return await service.process_get(identifier)
+    @server.tool(name="aiida_process_workgraph", description="Read a process call graph. This is a graph, not a simplified tree.", annotations=_READ_ONLY)
+    async def process_workgraph(identifier: str) -> dict[str, Any]: return await service.process_workgraph(identifier)
+    @server.tool(name="aiida_process_logs", description="Read process logs by identifier.", annotations=_READ_ONLY)
+    async def process_logs(identifier: str) -> dict[str, Any]: return await service.process_logs(identifier)
+    @server.tool(name="aiida_group_get", description="Read a Group by UUID or label.", annotations=_READ_ONLY)
+    async def group_get(identifier: str) -> dict[str, Any]: return await service.group_get(identifier)
+    @server.tool(name="aiida_group_list", description="List Groups in the configured runtime.", annotations=_READ_ONLY)
+    async def group_list() -> dict[str, Any]: return await service.group_list()
+    @server.tool(name="aiida_provenance_ancestors", description="Read bounded upstream provenance for a node UUID.", annotations=_READ_ONLY)
+    async def provenance_ancestors(root_uuid: str, depth: int = 2) -> dict[str, Any]: return await service.provenance_walk(root_uuid, direction="ancestors", depth=depth)
+    @server.tool(name="aiida_provenance_descendants", description="Read bounded downstream provenance for a node UUID.", annotations=_READ_ONLY)
+    async def provenance_descendants(root_uuid: str, depth: int = 2) -> dict[str, Any]: return await service.provenance_walk(root_uuid, direction="descendants", depth=depth)
+    @server.tool(name="aiida_provenance_roots", description="List top-level process roots for a supplied Group UUID.", annotations=_READ_ONLY)
+    async def provenance_roots(group_uuid: str, limit: int = 100) -> dict[str, Any]: return await service.provenance_roots(group_uuid, limit=limit)
+    @server.tool(name="aiida_provenance_subgraph", description="Read a bounded real AiiDA provenance graph.", annotations=_READ_ONLY)
+    async def provenance_subgraph(group_uuid: str, root_uuid: str, depth: int = 2) -> dict[str, Any]: return await service.provenance_subgraph(group_uuid, root_uuid, depth=depth)
+    @server.tool(name="aiida_archive_inspect", description="Read a workspace-relative AiiDA archive summary without importing it.", annotations=_READ_ONLY)
+    async def archive_inspect(path: str) -> dict[str, Any]: return await service.archive_inspect(path)
     return server
-
-
-__all__ = ["SubmissionPreviewRequest", "build_mcp_server"]

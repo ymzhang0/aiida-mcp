@@ -1,0 +1,18 @@
+[Unit]
+Description=ARIS AiiDA MCP
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/yimzhang/Development/llm/aiida-mcp
+Environment=ARIS_AIIDA_PROJECT_ID=c83779015a5e4711bb87f7b62231611b
+Environment=ARIS_AIIDA_PROJECTS_FILE=/home/yimzhang/.aiida/aiida-mcp-projects.json
+Environment=ARIS_AIIDA_MCP_PORT=8000
+ExecStart=/home/yimzhang/Development/llm/aiida-mcp/.venv/bin/aris-aiida-mcp-http serve
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+UMask=0077
+
+[Install]
+WantedBy=default.target

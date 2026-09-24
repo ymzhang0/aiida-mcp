@@ -1,140 +1,53 @@
-"""Project-scoped AiiDA operations shared by the MCP plugin and Manager."""
-
+"""Generic AiiDA operations for one explicitly configured runtime."""
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
-from .registry import AiiDAProject, ProjectRegistry
-from .runtime import ProjectRuntime, WorkerRuntimePool
+from .runtime import Runtime, WorkerRuntimePool
 
 
-class ProjectScopeError(ValueError):
-    pass
+@dataclass(frozen=True)
+class RuntimeConfig:
+    python_interpreter_path: str
+    aiida_profile: str
+    workspace_path: str | None = None
 
 
 class AiiDAService:
-    """Resolve a project ref once, then call only its AiiDA runtime."""
+    """No project, campaign, or Group-scope policy belongs here."""
 
-    def __init__(self, registry: ProjectRegistry, workers: WorkerRuntimePool) -> None:
-        self.registry = registry
+    def __init__(self, runtime: RuntimeConfig, workers: WorkerRuntimePool) -> None:
+        self.runtime = runtime
         self.workers = workers
 
-    def list_projects(self) -> list[dict[str, Any]]:
-        return [project.public_dict() for project in self.registry.list_projects()]
+    async def status(self) -> dict[str, Any]: return await self._call("runtime.status")
+    async def nodes(self, *, limit: int = 50, node_type: str | None = None) -> dict[str, Any]:
+        params: dict[str, Any] = {"limit": max(1, min(int(limit), 200)), "root_only": False}
+        if node_type: params["node_type"] = node_type
+        return await self._call("node.recent", params)
+    async def node_get(self, pk: int) -> dict[str, Any]: return await self._call("node.summary", {"pk": int(pk)})
+    async def node_links(self, identifier: str) -> dict[str, Any]: return await self._call("node.links", {"identifier": str(identifier)})
+    async def node_compare(self, left: str, right: str, *, depth: int = 2, max_differences: int = 100) -> dict[str, Any]:
+        return await self._call("node.compare", {"left": str(left), "right": str(right), "max_depth": max(0, min(int(depth), 6)), "max_differences": max(1, min(int(max_differences), 500))})
+    async def process_get(self, identifier: str) -> dict[str, Any]: return await self._call("process.detail", {"identifier": str(identifier)})
+    async def process_workgraph(self, identifier: str) -> dict[str, Any]: return await self._call("process.workgraph", {"identifier": str(identifier)})
+    async def process_logs(self, identifier: str) -> dict[str, Any]: return await self._call("process.logs", {"identifier": str(identifier)})
+    async def group_get(self, identifier: str) -> dict[str, Any]:
+        value = str(identifier).strip()
+        try:
+            UUID(value)
+            return await self._call("group.inspect_uuid", {"group_uuid": value, "limit": 1})
+        except ValueError:
+            return await self._call("group.inspect", {"label": value, "limit": 1})
+    async def group_list(self) -> dict[str, Any]: return await self._call("group.list")
+    async def provenance_walk(self, root_uuid: str, *, direction: str, depth: int = 2) -> dict[str, Any]: return await self._call("provenance.walk", {"root_uuid": root_uuid, "direction": direction, "depth": max(0, min(int(depth), 6))})
+    async def provenance_roots(self, group_uuid: str, *, limit: int = 100) -> dict[str, Any]: return await self._call("provenance.roots", {"group_uuid": group_uuid, "limit": max(1, min(int(limit), 200))})
+    async def provenance_subgraph(self, group_uuid: str, root_uuid: str, *, depth: int = 2) -> dict[str, Any]: return await self._call("provenance.subgraph", {"group_uuid": group_uuid, "root_uuid": root_uuid, "depth": max(0, min(int(depth), 6))})
+    async def provenance_node_detail(self, group_uuid: str, uuid: str) -> dict[str, Any]: return await self._call("provenance.node_detail", {"group_uuid": group_uuid, "uuid": uuid})
+    async def archive_inspect(self, path: str) -> dict[str, Any]: return await self._call("archive.inspect", {"path": str(path)})
 
-    def project(self, project_ref: str) -> AiiDAProject:
-        project = self.registry.get(project_ref)
-        if project is None or project.archived:
-            raise ProjectScopeError("Unknown or archived AiiDA project")
-        return project
-
-    async def status(self, project_ref: str) -> dict[str, Any]:
-        project = self.project(project_ref)
-        result = await self._call(project, "runtime.status")
-        return {**result, "project": project.public_dict()}
-
-    async def profiles(self, project_ref: str) -> dict[str, Any]:
-        return await self._call(self.project(project_ref), "profile.list")
-
-    async def resources(self, project_ref: str) -> dict[str, Any]:
-        return await self._call(self.project(project_ref), "resource.summary")
-
-    async def system_info(self, project_ref: str) -> dict[str, Any]:
-        return await self._call(self.project(project_ref), "system.info")
-
-    async def database_summary(self, project_ref: str) -> dict[str, Any]:
-        return await self._call(self.project(project_ref), "system.database_summary")
-
-    async def group_inspect(self, project_ref: str, *, limit: int = 500) -> dict[str, Any]:
-        project = self.project(project_ref)
-        return await self._call(
-            project, "group.inspect_uuid", {"group_uuid": project.group_uuid, "limit": max(1, min(int(limit), 500))}
-        )
-
-    async def node_detail(self, project_ref: str, identifier: str) -> dict[str, Any]:
-        project = self.project(project_ref)
-        await self._assert_group_member(project, identifier)
-        return await self._call(project, "node.summary", {"pk": int(identifier)})
-
-    async def process_logs(self, project_ref: str, identifier: str) -> dict[str, Any]:
-        project = self.project(project_ref)
-        await self._assert_group_member(project, identifier)
-        return await self._call(project, "process.logs", {"identifier": str(identifier)})
-
-    async def process_workgraph(self, project_ref: str, identifier: str) -> dict[str, Any]:
-        project = self.project(project_ref)
-        await self._assert_group_member(project, identifier)
-        return await self._call(project, "process.workgraph", {"identifier": str(identifier)})
-    async def recent_nodes(
-        self,
-        project_ref: str,
-        *,
-        limit: int = 50,
-        node_type: str | None = None,
-    ) -> dict[str, Any]:
-        project = self.project(project_ref)
-        payload: dict[str, Any] = {
-            "limit": max(1, min(int(limit), 200)),
-            "group_uuid": project.group_uuid,
-            "root_only": False,
-        }
-        if node_type:
-            payload["node_type"] = str(node_type)
-        return await self._call(project, "node.recent", payload)
-
-    async def recent_processes(self, project_ref: str, *, limit: int = 50) -> dict[str, Any]:
-        return await self.recent_nodes(project_ref, limit=limit, node_type="ProcessNode")
-
-    async def inspect_process(self, project_ref: str, identifier: str) -> dict[str, Any]:
-        project = self.project(project_ref)
-        cleaned = str(identifier or "").strip()
-        if not cleaned:
-            raise ValueError("Process identifier is required")
-        await self._assert_group_member(project, cleaned)
-        return await self._call(project, "process.detail", {"identifier": cleaned})
-
-    async def workflow_catalog(self, project_ref: str) -> dict[str, Any]:
-        return await self._call(self.project(project_ref), "workflow.catalog")
-
-    async def input_candidates(
-        self, project_ref: str, *, workchain: str, port_path: str, limit: int = 50
-    ) -> dict[str, Any]:
-        return await self._call(
-            self.project(project_ref),
-            "workflow.input_candidates",
-            {"entry_point": workchain, "port_path": port_path, "limit": max(1, min(int(limit), 200))},
-        )
-
-    async def submission_spec(self, project_ref: str, *, workchain: str) -> dict[str, Any]:
-        return await self._call(self.project(project_ref), "submission.spec", {"entry_point": workchain})
-
-    async def build_submission_preview(self, project_ref: str, request: dict[str, Any]) -> dict[str, Any]:
-        if not isinstance(request, dict) or not request:
-            raise ValueError("Structured submission request is required")
-        return await self._call(self.project(project_ref), "submission.builder_draft", request)
-
-    async def validate_submission_preview(self, project_ref: str, draft: dict[str, Any]) -> dict[str, Any]:
-        if not isinstance(draft, dict) or not draft:
-            raise ValueError("Submission draft is required")
-        return await self._call(self.project(project_ref), "submission.validate", {"draft": draft})
-
-    async def _assert_group_member(self, project: AiiDAProject, identifier: str) -> None:
-        result = await self._call(
-            project,
-            "group.contains_node",
-            {"group_uuid": project.group_uuid, "identifier": str(identifier)},
-        )
-        if not result.get("member"):
-            raise ProjectScopeError("Record is not a member of this AiiDA project")
-    async def _call(self, project: AiiDAProject, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        runtime = ProjectRuntime(
-            project_id=project.id,
-            python_interpreter_path=project.python_interpreter_path,
-            aiida_profile=project.aiida_profile,
-            workspace_path=project.workspace_path,
-        )
+    async def _call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        runtime = Runtime("configured-runtime", self.runtime.python_interpreter_path, self.runtime.aiida_profile, self.runtime.workspace_path)
         return await self.workers.request(runtime, method, params)
-
-
-__all__ = ["AiiDAService", "ProjectScopeError"]
