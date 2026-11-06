@@ -111,6 +111,10 @@ class AiiDAWorkerService:
             "process.control": self._process_control,
             "plugins.manifest": self._plugins_manifest,
             "plugins.call": self._plugins_call,
+            "computer.list": self._computer_list,
+            "computer.create": self._computer_create,
+            "code.check_executable": self._code_check_executable,
+            "code.create": self._code_create,
         }
         from aiida_mcp.worker.application.plugin_service import PluginRegistry
 
@@ -675,6 +679,34 @@ class AiiDAWorkerService:
             mode="workgraph_submit",
             payload=params,
         )
+
+    @staticmethod
+    def _computer_list(_: dict[str, Any]) -> Mapping[str, Any]:
+        from aiida_mcp.core.engine import ensure_profile_loaded
+        from aiida_mcp.worker.application.computer_service import list_computers
+        ensure_profile_loaded()
+        return list_computers()
+
+    @staticmethod
+    def _computer_create(params: dict[str, Any]) -> Mapping[str, Any]:
+        from aiida_mcp.core.engine import ensure_profile_loaded
+        from aiida_mcp.worker.application.computer_service import create_computer
+        ensure_profile_loaded()
+        return create_computer(params)
+
+    @staticmethod
+    def _code_check_executable(params: dict[str, Any]) -> Mapping[str, Any]:
+        from aiida_mcp.core.engine import ensure_profile_loaded
+        from aiida_mcp.worker.application.computer_service import check_executable
+        ensure_profile_loaded()
+        return check_executable(params)
+
+    @staticmethod
+    def _code_create(params: dict[str, Any]) -> Mapping[str, Any]:
+        from aiida_mcp.core.engine import ensure_profile_loaded
+        from aiida_mcp.worker.application.computer_service import create_code
+        ensure_profile_loaded()
+        return create_code(params)
 
     def _plugins_manifest(self, _: dict[str, Any]) -> Mapping[str, Any]:
         return self._plugins.manifest()

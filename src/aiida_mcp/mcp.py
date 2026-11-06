@@ -10,12 +10,16 @@ from .service import AiiDAService
 _READ_ONLY = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}
 _WRITE = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False}
 _DESTRUCTIVE = {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": False}
+_REMOTE_READ = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True}
+_REMOTE_WRITE = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True}
 
 _INSTRUCTIONS = """AiiDA tools for the single Python environment and profile selected when this server started.
 Checking work: aiida_process_list (filter by process_state such as waiting/running/finished/excepted/killed)
 -> aiida_process_get / aiida_process_logs / aiida_provenance_descendants for one process.
 Running work: aiida_workflow_list -> aiida_workflow_spec -> aiida_code_list / aiida_workflow_input_candidates
 -> aiida_submission_draft (validates, stores nothing) -> aiida_submit -> poll aiida_process_get.
+Setting up a cluster: aiida_ssh_hosts / aiida_computer_list -> aiida_computer_create (tests the connection
+first, stores nothing on failure) -> aiida_code_check -> aiida_code_create. Existing computers and codes are never modified.
 Input values: plain JSON for base types (2 -> Int, {"a": 1} -> Dict); reference stored nodes as {"pk": N} or
 {"uuid": "..."}; codes as "label@computer". Tools prefixed with a plugin name come from installed plugins."""
 
@@ -83,7 +87,24 @@ def build_mcp_server(service: AiiDAService, *, allow_write: bool = False, plugin
     async def submission_draft(entry_point: str, inputs: dict[str, Any] | None = None, protocol: str | None = None, protocol_arguments: dict[str, Any] | None = None, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         return await service.submission_draft(_draft(entry_point, inputs, protocol, protocol_arguments, overrides))
 
+    # Computers and codes
+    @server.tool(name="aiida_ssh_hosts", description="List host aliases from the user's ~/.ssh/config (hostname, user, port, ProxyJump, identity file path; never key contents). Use them to fill aiida_computer_create.", annotations=_READ_ONLY)
+    async def ssh_hosts() -> dict[str, Any]: return await service.ssh_hosts()
+    @server.tool(name="aiida_computer_list", description="List AiiDA computers: hostname, transport, scheduler, work dir, MPI command, and whether the current user has configured access.", annotations=_READ_ONLY)
+    async def computer_list() -> dict[str, Any]:
+        computers = await service.computer_list()
+        return {**computers, "capabilities": await service.infrastructure_capabilities()}
+    @server.tool(name="aiida_code_check", description="Check over the computer's transport whether an executable exists, after the computer's prepend_text and the given prepend_text (e.g. 'module load QuantumESPRESSO'). `executable` may be a name on PATH ('pw.x') or an absolute path; returns the resolved path.", annotations=_REMOTE_READ)
+    async def code_check(computer_label: str, executable: str, prepend_text: str | None = None) -> dict[str, Any]: return await service.code_check_executable(computer_label, executable, prepend_text)
+
     if allow_write:
+        @server.tool(name="aiida_computer_create", description="Create and configure a new AiiDA computer. Tests the connection first and stores nothing if it fails. Never modifies an existing computer. Give `fields` (computer_label, hostname, transport_type such as core.ssh_async/core.ssh/core.local, scheduler_type such as core.slurm, work_dir, mpirun_command, mpiprocs_per_machine, prepend_text, username, proxy_jump, key_filename, ...) and/or verdi-style `setup_yaml` and `configure_yaml`; `fields` win.", annotations=_REMOTE_WRITE)
+        async def computer_create(fields: dict[str, Any] | None = None, setup_yaml: str | None = None, configure_yaml: str | None = None) -> dict[str, Any]:
+            return await service.computer_create({"fields": dict(fields or {}), "setup_yaml": setup_yaml, "configure_yaml": configure_yaml})
+        @server.tool(name="aiida_code_create", description="Register an existing executable as a new AiiDA InstalledCode. Checks the executable on the computer first and stores nothing if it is missing. Give `fields` (label, computer_label, remote_abspath as absolute path or PATH name, default_calc_job_plugin such as quantumespresso.pw, prepend_text such as module loads, with_mpi) and/or verdi-style `yaml`; `fields` win.", annotations=_REMOTE_WRITE)
+        async def code_create(fields: dict[str, Any] | None = None, yaml: str | None = None) -> dict[str, Any]:
+            return await service.code_create({"fields": dict(fields or {}), "yaml": yaml})
+
         @server.tool(name="aiida_submit", description="Submit a workflow or calculation to the AiiDA daemon. Takes the same arguments as aiida_submission_draft; run that first. Returns the new process PK.", annotations=_WRITE)
         async def submit(entry_point: str, inputs: dict[str, Any] | None = None, protocol: str | None = None, protocol_arguments: dict[str, Any] | None = None, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
             return await service.submission_submit(_draft(entry_point, inputs, protocol, protocol_arguments, overrides))

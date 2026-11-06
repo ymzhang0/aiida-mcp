@@ -45,6 +45,7 @@ agents that launch MCP servers as subprocesses.
 | --- | --- |
 | Check work | `aiida_process_list` (filter by state, label, age, Group), `aiida_process_get`, `aiida_process_logs`, `aiida_process_workgraph` |
 | Run work | `aiida_workflow_list`, `aiida_workflow_spec`, `aiida_workflow_input_candidates`, `aiida_code_list`, `aiida_submission_draft`, **`aiida_submit`** |
+| Clusters and codes | `aiida_ssh_hosts`, `aiida_computer_list`, `aiida_code_check`, **`aiida_computer_create`**, **`aiida_code_create`** |
 | Control work | **`aiida_process_kill`**, **`aiida_process_pause`**, **`aiida_process_play`** |
 | Explore data | `aiida_node_search`, `aiida_node_get`, `aiida_node_links`, `aiida_node_compare`, `aiida_group_list`, `aiida_group_get`, `aiida_provenance_*`, `aiida_archive_inspect`, `aiida_runtime_status` |
 | Plugins | `<plugin>_<function>`, e.g. `analyser_process_report` |
@@ -53,6 +54,13 @@ Tools in **bold** change the profile. They carry MCP `readOnlyHint: false`, and
 kill also carries `destructiveHint: true`, so agent clients ask before running
 them. `--read-only` or `AIIDA_MCP_READ_ONLY=1` removes them, together with any
 plugin tool not marked read-only.
+
+`aiida_computer_create` and `aiida_code_create` only create. They refuse a
+label that already exists, so an agent cannot reconfigure a computer that has
+running jobs. Before storing anything they test the connection, or check that
+the executable exists after the given `prepend_text` (module loads). Both also
+accept the YAML that `verdi computer setup --config` and
+`verdi code create --config` use.
 
 `aiida_submit` accepts workflows (`aiida.workflows`) and calculations
 (`aiida.calculations`). Inputs are plain JSON: `2` becomes `Int(2)`,

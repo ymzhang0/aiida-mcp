@@ -1,6 +1,6 @@
 ---
 name: aiida
-description: Work with the user's AiiDA profile through the aiida MCP tools - check on calculations and workflows, find out why one failed, find a workflow and submit it, or kill/pause/resume processes. Use when the user mentions AiiDA, verdi, a process PK, a WorkChain or CalcJob, a calculation or job they ran, or asks to run or submit a simulation (Quantum ESPRESSO, EPW, Wannier90, ...).
+description: Work with the user's AiiDA profile through the aiida MCP tools - check on calculations and workflows, find out why one failed, find a workflow and submit it, kill/pause/resume processes, or set up a cluster (computer) and register codes. Use when the user mentions AiiDA, verdi, a process PK, a WorkChain or CalcJob, a calculation or job they ran, or asks to run or submit a simulation (Quantum ESPRESSO, EPW, Wannier90, ...), or to configure a cluster or code for AiiDA.
 ---
 
 # Working with AiiDA
@@ -60,10 +60,37 @@ Always follow this order:
 say whether they are top-level workflows (killing them kills their children).
 `aiida_process_pause` / `aiida_process_play` are safe to undo.
 
+## Setting up a cluster and codes
+
+Registering a code means telling AiiDA where an existing executable is. These
+tools do not compile or install software.
+
+1. `aiida_computer_list` shows what already exists. Reuse an existing computer
+   when it fits. Existing computers and codes cannot be changed here.
+2. `aiida_ssh_hosts` lists the user's SSH aliases. For `core.ssh_async`, set
+   `host` to the alias so the user's ~/.ssh/config (ProxyJump, key) applies.
+   For `core.ssh`, copy `username`, `proxy_jump`, and `key_filename`. Never ask
+   for or read private keys or passwords.
+3. Ask the user for whatever you cannot know: the scheduler (usually
+   `core.slurm`), a scratch `work_dir` (`{username}` is substituted), the MPI
+   launcher (`srun` or `mpirun -np {tot_num_mpiprocs}`), cores per node, and
+   any `prepend_text` (modules, `export` lines). If the cluster has a
+   verdi-style YAML (for example from aiida-code-registry), pass it as
+   `setup_yaml` / `configure_yaml`.
+4. **Confirm the settings with the user**, then call `aiida_computer_create`.
+   It tests the connection first and stores nothing if the test fails. A
+   `Permission denied` error usually means the key needs an ssh-agent or a
+   passphrase-less key. Tell the user; do not retry blindly.
+5. `aiida_code_check` with the executable name (e.g. `pw.x`) and the module
+   loads in `prepend_text` (e.g. `module load QuantumESPRESSO/7.2`). Iterate
+   with the user until it is found.
+6. **Confirm**, then call `aiida_code_create` with `default_calc_job_plugin`
+   (e.g. `quantumespresso.pw`), `with_mpi`, and the same `prepend_text`. It
+   re-checks the executable and stores the resolved absolute path.
+7. Before the first real submission, suggest a tiny test calculation.
+
 ## Limits
 
 - Submission needs the AiiDA daemon. If `aiida_runtime_status` reports
   `daemon_status: false`, ask the user to run `verdi daemon start`.
-- These tools do not set up computers or codes. Ask the user to do that with
-  `verdi computer setup` / `verdi code create`.
 - If submission tools are missing, the server runs in read-only mode.

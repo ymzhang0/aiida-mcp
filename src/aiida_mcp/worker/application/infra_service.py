@@ -418,12 +418,13 @@ def _build_computer_export_response(computer: Any) -> InfrastructureExportRespon
 def setup_code(payload: CodeSetupRequest) -> dict[str, Any]:
     try:
         computer = orm.Computer.collection.get(label=payload.computer_label)
-        existing = orm.Code.collection.find(
-            filters={
-                "label": payload.label,
-                "attributes.remote_computer_uuid": computer.uuid,
-            }
+        existing = (
+            orm.QueryBuilder()
+            .append(orm.Computer, filters={"uuid": computer.uuid}, tag="computer")
+            .append(orm.Data, with_computer="computer", filters={"label": payload.label, "node_type": {"like": "%code%"}})
+            .all(flat=True)
         )
+        existing = [node for node in existing if isinstance(node, orm.AbstractCode)]
         if existing:
             raise http_error(
                 409,
@@ -445,7 +446,8 @@ def setup_code(payload: CodeSetupRequest) -> dict[str, Any]:
             code.set_prepend_text(payload.prepend_text)
         if payload.append_text:
             code.set_append_text(payload.append_text)
-        code.with_mpi = payload.with_mpi
+        if payload.with_mpi is not None:
+            code.with_mpi = payload.with_mpi
         code.use_double_quotes = payload.use_double_quotes
         _prepare_unstored_node_for_store(code, computer_pk=int(computer.pk))
         code.store()
@@ -511,6 +513,14 @@ def setup_infrastructure(payload: InfrastructureSetupRequest) -> dict[str, Any]:
         transport_type, _, auth_fields = _resolve_transport_capabilities(payload.transport_type)
         try:
             computer = orm.Computer.collection.get(label=payload.computer_label)
+            if not payload.allow_update:
+                raise http_error(
+                    409,
+                    "Computer already exists",
+                    reason=f"Computer '{payload.computer_label}' already exists; choose another label or update it with verdi.",
+                    computer=payload.computer_label,
+                    pk=int(computer.pk),
+                )
             if str(computer.transport_type) != transport_type:
                 raise http_error(
                     409,

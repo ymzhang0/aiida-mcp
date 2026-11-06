@@ -31,7 +31,7 @@ class CodeSetupRequest(BaseModel):
     remote_abspath: str
     prepend_text: str | None = None
     append_text: str | None = None
-    with_mpi: bool | None = True
+    with_mpi: bool | None = None
     use_double_quotes: bool = False
 
 
@@ -75,6 +75,9 @@ class InfrastructureSetupRequest(BaseModel):
     max_io_allowed: int | None = None
     authentication_script: str | None = None
     backend: str | None = None
+
+    # Reconfigure an existing computer with the same label instead of refusing.
+    allow_update: bool = False
 
     # Code fields
     code_label: str | None = None

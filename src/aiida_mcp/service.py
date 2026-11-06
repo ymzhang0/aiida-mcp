@@ -67,6 +67,15 @@ class AiiDAService:
     async def submission_draft(self, draft: dict[str, Any]) -> dict[str, Any]: return await self._call("submission.builder_draft", dict(draft))
     async def submission_submit(self, draft: dict[str, Any]) -> dict[str, Any]: return await self._call("submission.submit", {"draft": dict(draft)})
 
+    # Computers and codes
+    async def ssh_hosts(self) -> dict[str, Any]: return await self._call("infrastructure.ssh_config")
+    async def computer_list(self) -> dict[str, Any]: return await self._call("computer.list")
+    async def infrastructure_capabilities(self) -> dict[str, Any]: return await self._call("infrastructure.capabilities")
+    async def computer_create(self, params: dict[str, Any]) -> dict[str, Any]: return await self._call("computer.create", params)
+    async def code_check_executable(self, computer_label: str, executable: str, prepend_text: str | None = None) -> dict[str, Any]:
+        return await self._call("code.check_executable", {"computer_label": computer_label, "executable": executable, "prepend_text": prepend_text})
+    async def code_create(self, params: dict[str, Any]) -> dict[str, Any]: return await self._call("code.create", params)
+
     # Plugins (loaded inside the worker from the `aiida_mcp.tools` entry-point group)
     async def plugin_manifest(self) -> dict[str, Any]: return await self._call("plugins.manifest")
     async def plugin_call(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]: return await self._call("plugins.call", {"tool": tool, "arguments": dict(arguments)})
