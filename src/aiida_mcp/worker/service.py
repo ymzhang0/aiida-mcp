@@ -484,7 +484,10 @@ class AiiDAWorkerService:
         from aiida_mcp.core.engine import ensure_profile_loaded, orm
         ensure_profile_loaded()
         computer = orm.Computer.collection.get(label=computer_label)
-        codes = orm.Code.collection.find(filters={"attributes.remote_computer_uuid": computer.uuid})
+        query = orm.QueryBuilder().append(orm.Computer, filters={"uuid": computer.uuid}, tag="computer")
+        # QueryBuilder widens AbstractCode to every `data.core.%` node (RemoteData too), so filter by class here.
+        query.append(orm.Data, with_computer="computer", filters={"node_type": {"!like": "data.core.remote.%"}}, project="*")
+        codes = [node for node in query.all(flat=True) if isinstance(node, orm.AbstractCode)]
         result = []
         for code in codes:
             result.append({

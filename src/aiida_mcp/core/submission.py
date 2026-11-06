@@ -138,9 +138,39 @@ def _coerce_argument(name: str, value: Any, port: Any = None) -> Any:
         return _load_group_like(value)
 
     if node_type is not None and any(_safe_issubclass(item, node_type) for item in valid_types):
+        if not _is_node_reference(value):
+            wrapped = _wrap_base_value(value, valid_types)
+            if wrapped is not _MISSING:
+                return wrapped
         return _load_node_like(value)
 
     return value
+
+
+def _is_node_reference(value: Any) -> bool:
+    return isinstance(value, Mapping) and set(value) <= {"pk", "uuid"} and any(value.get(key) not in (None, "") for key in ("pk", "uuid"))
+
+
+def _wrap_base_value(value: Any, valid_types: list[type]) -> Any:
+    """Wrap a raw JSON value into the base Data type a port accepts, e.g. ``2`` -> ``Int(2)``.
+
+    Without this, a bare integer for an ``Int`` port is misread as a node PK.
+    """
+    if isinstance(value, orm.Node):
+        return _MISSING
+    is_number = isinstance(value, (int, float)) and not isinstance(value, bool)
+    compatible = (
+        (orm.Bool, isinstance(value, bool)),
+        (orm.Int, isinstance(value, int) and not isinstance(value, bool)),
+        (orm.Float, is_number),
+        (orm.Str, isinstance(value, str)),
+        (orm.Dict, isinstance(value, Mapping)),
+        (orm.List, isinstance(value, (list, tuple))),
+    )
+    for data_type, matches in compatible:
+        if matches and any(item is data_type for item in valid_types):
+            return data_type(dict(value)) if data_type is orm.Dict else data_type(list(value)) if data_type is orm.List else data_type(value)
+    return _MISSING
 
 
 def _serialize_node_value(node: orm.Node) -> Any:
