@@ -1,0 +1,30 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "aiida",
+  "version": "0.1.0",
+  "description": "Inspect, submit, and manage AiiDA calculations and workflows from your agent.",
+  "author": { "name": "Yiming Zhang" },
+  "homepage": "https://github.com/ymzhang0/aiida-mcp",
+  "repository": "https://github.com/ymzhang0/aiida-mcp",
+  "keywords": ["aiida", "materials", "hpc", "workflows", "mcp"],
+  "userConfig": {
+    "python": {
+      "type": "file",
+      "title": "Python interpreter",
+      "description": "Python of the environment with AiiDA and aiida-mcp installed, e.g. /path/to/project/.venv/bin/python",
+      "required": true
+    },
+    "profile": {
+      "type": "string",
+      "title": "AiiDA profile",
+      "description": "Profile name, as listed by `verdi profile list`",
+      "required": true
+    },
+    "read_only": {
+      "type": "boolean",
+      "title": "Read-only",
+      "description": "Hide submit, kill, pause, and play; the agent can only inspect",
+      "default": false
+    }
+  }
+}

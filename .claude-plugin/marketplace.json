@@ -1,0 +1,15 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "aiida-mcp",
+  "description": "Agent plugins for AiiDA",
+  "owner": { "name": "Yiming Zhang", "url": "https://github.com/ymzhang0" },
+  "plugins": [
+    {
+      "name": "aiida",
+      "source": "./plugin",
+      "description": "Inspect, submit, and manage AiiDA calculations and workflows from your agent.",
+      "category": "science",
+      "tags": ["aiida", "materials", "hpc"]
+    }
+  ]
+}

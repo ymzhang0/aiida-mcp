@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "aiida": {
+      "command": "${user_config.python}",
+      "args": ["-m", "aiida_mcp", "serve"],
+      "env": {
+        "AIIDA_MCP_TRANSPORT": "stdio",
+        "AIIDA_MCP_PYTHON": "${user_config.python}",
+        "AIIDA_MCP_PROFILE": "${user_config.profile}",
+        "AIIDA_MCP_READ_ONLY": "${user_config.read_only}",
+        "AIIDA_MCP_WORKSPACE": "${CLAUDE_PROJECT_DIR}"
+      }
+    }
+  }
+}

@@ -5,6 +5,22 @@ discover and submit workflows, and kill, pause or resume running work. Extra
 tools from other packages (such as `aiida-analyser`) plug in through an
 entry point.
 
+## Use it from Claude Code
+
+The repository is also a Claude Code plugin marketplace. The `aiida` plugin
+bundles this server and a skill that teaches the agent how to check, draft,
+confirm, and submit work:
+
+```
+/plugin marketplace add ymzhang0/aiida-mcp
+/plugin install aiida@aiida-mcp
+```
+
+See [plugin/README.md](plugin/README.md). Other agents can use the server
+directly over MCP, as described below.
+
+## Run the server
+
 Start one instance for one human-selected runtime:
 
 ```bash
