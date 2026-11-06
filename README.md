@@ -43,31 +43,31 @@ agents that launch MCP servers as subprocesses.
 
 | Area | Tools |
 | --- | --- |
-| Check work | `aiida_process_list` (filter by state, label, age, Group), `aiida_process_get`, `aiida_process_logs`, `aiida_process_workgraph` |
-| Run work | `aiida_workflow_list`, `aiida_workflow_spec`, `aiida_workflow_input_candidates`, `aiida_code_list`, `aiida_submission_draft`, **`aiida_submit`** |
-| Clusters and codes | `aiida_ssh_hosts`, `aiida_computer_list`, `aiida_code_check`, **`aiida_computer_create`**, **`aiida_code_create`** |
-| Control work | **`aiida_process_kill`**, **`aiida_process_pause`**, **`aiida_process_play`** |
-| Explore data | `aiida_node_search`, `aiida_node_get`, `aiida_node_links`, `aiida_node_compare`, `aiida_group_list`, `aiida_group_get`, `aiida_provenance_*`, `aiida_archive_inspect`, `aiida_runtime_status` |
-| Plugins | `<plugin>_<function>`, e.g. `analyser_process_report` |
+| Check work | `list_processes` (filter by state, label, age, Group), `get_process`, `get_process_logs`, `get_workgraph` |
+| Run work | `list_workflows`, `get_workflow_spec`, `find_input_candidates`, `list_codes`, `validate_submission`, **`submit`** |
+| Clusters and codes | `list_ssh_hosts`, `list_computers`, `check_code`, **`create_computer`**, **`create_code`** |
+| Control work | **`kill_processes`**, **`pause_processes`**, **`resume_processes`** |
+| Explore data | `list_nodes`, `get_node`, `get_node_links`, `compare_nodes`, `list_groups`, `get_group`, `get_ancestors`, `get_descendants`, `list_provenance_roots`, `get_provenance_subgraph`, `inspect_archive`, `get_status` |
+| Plugins | named after the plugin's functions, e.g. `diagnose_process` |
 
 Tools in **bold** change the profile. They carry MCP `readOnlyHint: false`, and
 kill also carries `destructiveHint: true`, so agent clients ask before running
 them. `--read-only` or `AIIDA_MCP_READ_ONLY=1` removes them, together with any
 plugin tool not marked read-only.
 
-`aiida_computer_create` and `aiida_code_create` only create. They refuse a
+`create_computer` and `create_code` only create. They refuse a
 label that already exists, so an agent cannot reconfigure a computer that has
 running jobs. Before storing anything they test the connection, or check that
 the executable exists after the given `prepend_text` (module loads). Both also
 accept the YAML that `verdi computer setup --config` and
 `verdi code create --config` use.
 
-`aiida_submit` accepts workflows (`aiida.workflows`) and calculations
+`submit` accepts workflows (`aiida.workflows`) and calculations
 (`aiida.calculations`). Inputs are plain JSON: `2` becomes `Int(2)`,
 `{"a": 1}` becomes `Dict`, a code is `"label@computer"`, and a stored node is
 referenced as `{"pk": N}` or `{"uuid": "..."}`. Workflows with
 `get_builder_from_protocol` can instead take `protocol`, `protocol_arguments`
-and `overrides`. `aiida_submission_draft` takes the same arguments and only
+and `overrides`. `validate_submission` takes the same arguments and only
 validates.
 
 ## Architecture
@@ -88,15 +88,15 @@ analyser = "aiida_analyser.mcp:tools"
 ```
 
 The target is a list of plain functions, or a callable that returns one.
-Each function becomes the tool `<entry point name>_<function name>`:
+Each function becomes a tool with the function's name, so name functions verb first:
 
 ```python
-def process_report(identifier: str, include_outputs: bool = False) -> dict:
+def diagnose_process(identifier: str, include_outputs: bool = False) -> dict:
     """Diagnose a process: failing branches and why they failed."""
     ...
 
-process_report.read_only = True   # omit for tools that modify the profile
-tools = [process_report]
+diagnose_process.read_only = True   # omit for tools that modify the profile
+tools = [diagnose_process]
 ```
 
 - The docstring becomes the description the agent reads, so write it for the
@@ -104,6 +104,8 @@ tools = [process_report]
 - Type hints become the JSON input schema; unknown arguments are rejected.
 - The profile is already loaded when the function runs. It must return
   JSON-serialisable data, and a non-dict result is wrapped as `{"result": ...}`.
+- A name already used by a built-in tool or another plugin is skipped and
+  logged, so choose specific names.
 - Plugins never import `aiida_mcp`. The worker loads them; the server reads
   their manifest once at start-up. Restart the server after installing a
   plugin. A plugin that fails to import is logged and skipped. Use

@@ -6,8 +6,8 @@ A package exposes tools through the ``aiida_mcp.tools`` entry-point group::
     analyser = "aiida_analyser.mcp:tools"
 
 The entry point resolves to an iterable of plain functions, or to a callable
-returning one. Each function becomes the MCP tool ``<entry point>_<function>``:
-its docstring is the description and its type-hinted signature is the input
+returning one. Each function becomes an MCP tool named after the function, so
+name it verb first (``diagnose_process``); a name used twice is skipped. Its docstring is the description and its type-hinted signature is the input
 schema. Mark a function ``fn.read_only = True`` when it never mutates the
 profile; anything else is treated as a write tool and is hidden from
 ``--read-only`` servers. Plugins never need to import ``aiida_mcp``.
@@ -75,7 +75,10 @@ def discover() -> tuple[dict[str, PluginTool], list[dict[str, str]]]:
             errors.append({"plugin": plugin, "error": f"{type(exc).__name__}: {exc}"})
             continue
         for function in functions:
-            name = f"{plugin}_{_NAME.sub('_', function.__name__).strip('_')}"
+            name = _NAME.sub("_", function.__name__).strip("_")
+            if name in tools:
+                errors.append({"plugin": plugin, "tool": name, "error": f"tool name already provided by plugin '{tools[name].plugin}'"})
+                continue
             try:
                 model = _arguments_model(name, function)
             except Exception as exc:  # noqa: BLE001

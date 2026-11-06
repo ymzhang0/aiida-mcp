@@ -20,10 +20,10 @@ class _Service:
 async def test_mcp_tools_do_not_accept_project_ref() -> None:
     server = build_mcp_server(_Service())
     tools = {tool.name: tool for tool in await server.list_tools()}
-    assert "project_ref" not in tools["aiida_node_search"].parameters["properties"]
-    assert tools["aiida_node_search"].annotations.readOnlyHint is True
-    assert {"aiida_node_links", "aiida_node_compare", "aiida_process_workgraph", "aiida_provenance_ancestors", "aiida_provenance_descendants", "aiida_archive_inspect"} <= set(tools)
-    assert "aiida_process_tree" not in tools
+    assert "project_ref" not in tools["list_nodes"].parameters["properties"]
+    assert tools["list_nodes"].annotations.readOnlyHint is True
+    assert {"get_node_links", "compare_nodes", "get_workgraph", "get_ancestors", "get_descendants", "inspect_archive"} <= set(tools)
+    assert "get_process_tree" not in tools
 
 
 def test_internal_worker_has_no_project_binding_methods() -> None:

@@ -7,7 +7,7 @@ import pytest
 from aiida_mcp.mcp import build_mcp_server
 from aiida_mcp.worker.application import plugin_service
 
-_WRITE_TOOLS = {"aiida_submit", "aiida_process_kill", "aiida_process_pause", "aiida_process_play"}
+_WRITE_TOOLS = {"submit", "kill_processes", "pause_processes", "resume_processes"}
 _MANIFEST = [
     {"name": "demo_report", "plugin": "demo", "description": "Report.", "read_only": True,
      "input_schema": {"type": "object", "properties": {"identifier": {"type": "string"}}, "required": ["identifier"]}},
@@ -39,8 +39,8 @@ async def test_write_tools_are_registered_only_when_allowed() -> None:
     read_only = await _tools(build_mcp_server(_Service(), allow_write=False, plugin_tools=_MANIFEST))
     assert _WRITE_TOOLS <= set(writable)
     assert not _WRITE_TOOLS & set(read_only)
-    assert writable["aiida_process_kill"].annotations.destructiveHint is True
-    assert {"aiida_process_list", "aiida_workflow_list", "aiida_workflow_spec", "aiida_code_list", "aiida_submission_draft"} <= set(read_only)
+    assert writable["kill_processes"].annotations.destructiveHint is True
+    assert {"list_processes", "list_workflows", "get_workflow_spec", "list_codes", "validate_submission"} <= set(read_only)
     assert "demo_report" in read_only and "demo_cleanup" not in read_only
     assert "demo_cleanup" in writable
 
@@ -60,7 +60,7 @@ async def test_plugin_tool_uses_manifest_schema_and_proxies_to_worker() -> None:
 async def test_submit_maps_protocol_arguments_to_builder_intent() -> None:
     service = _Service()
     server = build_mcp_server(service, allow_write=True)
-    await server.call_tool("aiida_submit", {"entry_point": "x.y", "protocol": "fast", "protocol_arguments": {"code": "pw@cluster"}})
+    await server.call_tool("submit", {"entry_point": "x.y", "protocol": "fast", "protocol_arguments": {"code": "pw@cluster"}})
     assert service.calls == [("submit", {"entry_point": "x.y", "protocol": "fast", "intent_data": {"code": "pw@cluster"}, "overrides": {}})]
 
 
@@ -83,17 +83,37 @@ def test_worker_discovers_entry_point_tools(monkeypatch) -> None:
     registry = plugin_service.PluginRegistry()
     manifest = registry.manifest()
     tools = {item["name"]: item for item in manifest["tools"]}
-    assert tools["demo_report"]["read_only"] is True
-    assert tools["demo_report"]["description"] == "Diagnose a process."
-    assert tools["demo_report"]["input_schema"]["required"] == ["identifier"]
-    assert tools["demo_cleanup"]["read_only"] is False
+    assert set(tools) == {"report", "cleanup"}
+    assert tools["report"]["read_only"] is True
+    assert tools["report"]["description"] == "Diagnose a process."
+    assert tools["report"]["input_schema"]["required"] == ["identifier"]
+    assert tools["cleanup"]["read_only"] is False
     assert [error["plugin"] for error in manifest["errors"]] == ["broken"]
 
     monkeypatch.setattr("aiida_mcp.core.engine.ensure_profile_loaded", lambda: None)
-    assert registry.call("demo_report", {"identifier": "7"}) == {"identifier": "7", "include_outputs": False}
-    assert registry.call("demo_cleanup", {}) == {"result": [1]}
+    assert registry.call("report", {"identifier": "7"}) == {"identifier": "7", "include_outputs": False}
+    assert registry.call("cleanup", {}) == {"result": [1]}
     with pytest.raises(Exception):
-        registry.call("demo_report", {"identifier": "7", "unexpected": 1})
+        registry.call("report", {"identifier": "7", "unexpected": 1})
+
+
+def test_duplicate_plugin_tool_names_are_reported(monkeypatch) -> None:
+    first = EntryPoint(name="first", value=f"{__name__}:_TOOLS", group=plugin_service.ENTRY_POINT_GROUP)
+    second = EntryPoint(name="second", value=f"{__name__}:_TOOLS", group=plugin_service.ENTRY_POINT_GROUP)
+    monkeypatch.setattr(plugin_service, "entry_points", lambda group: [first, second])
+    manifest = plugin_service.PluginRegistry().manifest()
+    assert {item["plugin"] for item in manifest["tools"]} == {"first"}
+    assert {(error["plugin"], error["tool"]) for error in manifest["errors"]} == {("second", "report"), ("second", "cleanup")}
+
+
+@pytest.mark.anyio
+async def test_plugin_tool_cannot_shadow_a_builtin_tool() -> None:
+    service = _Service()
+    shadow = [{**_MANIFEST[0], "name": "submit"}]
+    server = build_mcp_server(service, allow_write=True, plugin_tools=shadow)
+    await server.call_tool("submit", {"entry_point": "x.y"})
+    # The built-in tool records ("submit", draft); the plugin proxy would record ("submit", arguments) with no intent_data.
+    assert service.calls == [("submit", {"entry_point": "x.y", "protocol": None, "intent_data": {}, "overrides": {}})]
 
 
 _TOOLS = [report, cleanup]
