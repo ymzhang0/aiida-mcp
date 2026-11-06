@@ -1,6 +1,6 @@
 # AiiDA MCP quickstart
 
-Start one local generic runtime for a human-selected Python environment and AiiDA profile:
+Start one server for a human-selected Python environment and AiiDA profile:
 
 ```bash
 AIIDA_MCP_PYTHON=/path/to/project/.venv/bin/python \
@@ -9,7 +9,20 @@ AIIDA_MCP_WORKSPACE=/path/to/project \
 uv run aiida-mcp serve
 ```
 
-The local API is `http://127.0.0.1:8043/api`; the read-only MCP endpoint is
-`http://127.0.0.1:8043/mcp`. It has no Manager UI, project registry or
-`project_ref` parameter. Use `aiida-project manager-serve` for a scoped project
-view and `aiida-manager` only for the desktop shell.
+Connect an agent to `http://127.0.0.1:8043/mcp/`. For example, in Claude Code:
+
+```bash
+claude mcp add --transport http aiida http://127.0.0.1:8043/mcp/
+```
+
+Or let the agent launch it over stdio:
+
+```json
+{"mcpServers": {"aiida": {"command": "aiida-mcp", "args": ["serve"],
+  "env": {"AIIDA_MCP_TRANSPORT": "stdio",
+          "AIIDA_MCP_PYTHON": "/path/to/project/.venv/bin/python",
+          "AIIDA_MCP_PROFILE": "silicon"}}}}
+```
+
+Submitting requires a running daemon (`verdi daemon start`). Add `--read-only`
+to expose inspection tools only.

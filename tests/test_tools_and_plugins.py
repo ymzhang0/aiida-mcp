@@ -1,0 +1,99 @@
+from __future__ import annotations
+
+from importlib.metadata import EntryPoint
+
+import pytest
+
+from aiida_mcp.mcp import build_mcp_server
+from aiida_mcp.worker.application import plugin_service
+
+_WRITE_TOOLS = {"aiida_submit", "aiida_process_kill", "aiida_process_pause", "aiida_process_play"}
+_MANIFEST = [
+    {"name": "demo_report", "plugin": "demo", "description": "Report.", "read_only": True,
+     "input_schema": {"type": "object", "properties": {"identifier": {"type": "string"}}, "required": ["identifier"]}},
+    {"name": "demo_cleanup", "plugin": "demo", "description": "Cleanup.", "read_only": False,
+     "input_schema": {"type": "object", "properties": {}}},
+]
+
+
+class _Service:
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    async def plugin_call(self, tool, arguments):
+        self.calls.append((tool, arguments))
+        return {"tool": tool, "arguments": arguments}
+
+    async def submission_submit(self, draft):
+        self.calls.append(("submit", draft))
+        return {"pk": 1}
+
+
+async def _tools(server):
+    return {tool.name: tool for tool in await server.list_tools()}
+
+
+@pytest.mark.anyio
+async def test_write_tools_are_registered_only_when_allowed() -> None:
+    writable = await _tools(build_mcp_server(_Service(), allow_write=True, plugin_tools=_MANIFEST))
+    read_only = await _tools(build_mcp_server(_Service(), allow_write=False, plugin_tools=_MANIFEST))
+    assert _WRITE_TOOLS <= set(writable)
+    assert not _WRITE_TOOLS & set(read_only)
+    assert writable["aiida_process_kill"].annotations.destructiveHint is True
+    assert {"aiida_process_list", "aiida_workflow_list", "aiida_workflow_spec", "aiida_code_list", "aiida_submission_draft"} <= set(read_only)
+    assert "demo_report" in read_only and "demo_cleanup" not in read_only
+    assert "demo_cleanup" in writable
+
+
+@pytest.mark.anyio
+async def test_plugin_tool_uses_manifest_schema_and_proxies_to_worker() -> None:
+    service = _Service()
+    server = build_mcp_server(service, allow_write=False, plugin_tools=_MANIFEST)
+    tool = (await _tools(server))["demo_report"]
+    assert tool.parameters["required"] == ["identifier"]
+    assert tool.annotations.readOnlyHint is True
+    result = await server.call_tool("demo_report", {"identifier": "5"})
+    assert result.structured_content == {"tool": "demo_report", "arguments": {"identifier": "5"}}
+
+
+@pytest.mark.anyio
+async def test_submit_maps_protocol_arguments_to_builder_intent() -> None:
+    service = _Service()
+    server = build_mcp_server(service, allow_write=True)
+    await server.call_tool("aiida_submit", {"entry_point": "x.y", "protocol": "fast", "protocol_arguments": {"code": "pw@cluster"}})
+    assert service.calls == [("submit", {"entry_point": "x.y", "protocol": "fast", "intent_data": {"code": "pw@cluster"}, "overrides": {}})]
+
+
+def report(identifier: str, include_outputs: bool = False) -> dict:
+    """Diagnose a process."""
+    return {"identifier": identifier, "include_outputs": include_outputs}
+
+
+report.read_only = True
+
+
+def cleanup() -> list:
+    return [1]
+
+
+def test_worker_discovers_entry_point_tools(monkeypatch) -> None:
+    entry_point = EntryPoint(name="demo", value=f"{__name__}:_TOOLS", group=plugin_service.ENTRY_POINT_GROUP)
+    broken = EntryPoint(name="broken", value="does_not_exist:tools", group=plugin_service.ENTRY_POINT_GROUP)
+    monkeypatch.setattr(plugin_service, "entry_points", lambda group: [entry_point, broken])
+    registry = plugin_service.PluginRegistry()
+    manifest = registry.manifest()
+    tools = {item["name"]: item for item in manifest["tools"]}
+    assert tools["demo_report"]["read_only"] is True
+    assert tools["demo_report"]["description"] == "Diagnose a process."
+    assert tools["demo_report"]["input_schema"]["required"] == ["identifier"]
+    assert tools["demo_cleanup"]["read_only"] is False
+    assert [error["plugin"] for error in manifest["errors"]] == ["broken"]
+
+    monkeypatch.setattr("aiida_mcp.core.engine.ensure_profile_loaded", lambda: None)
+    assert registry.call("demo_report", {"identifier": "7"}) == {"identifier": "7", "include_outputs": False}
+    assert registry.call("demo_cleanup", {}) == {"result": [1]}
+    with pytest.raises(Exception):
+        registry.call("demo_report", {"identifier": "7", "unexpected": 1})
+
+
+_TOOLS = [report, cleanup]

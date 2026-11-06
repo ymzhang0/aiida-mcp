@@ -6,11 +6,22 @@ from typing import Any, Mapping
 from aiida import orm
 from aiida.engine import submit
 from aiida.engine.processes.ports import PortNamespace
-from aiida.plugins import WorkflowFactory
+from aiida.plugins import CalculationFactory, WorkflowFactory
 
 from aiida_mcp.core.engine import ensure_profile_loaded
 
 _MISSING = object()
+
+
+def load_process_class(entry_point: str) -> Any:
+    """Resolve a submittable process class from an ``aiida.workflows`` or ``aiida.calculations`` entry point."""
+    try:
+        return WorkflowFactory(entry_point)
+    except Exception as workflow_error:
+        try:
+            return CalculationFactory(entry_point)
+        except Exception:
+            raise workflow_error from None
 
 
 def _normalize(value: Any) -> Any:
@@ -340,7 +351,7 @@ def _build_builder_result(params: Mapping[str, Any]) -> dict[str, Any]:
     overrides = params.get("overrides") if isinstance(params.get("overrides"), Mapping) else {}
     input_bindings = params.get("inputs") if isinstance(params.get("inputs"), Mapping) else None
 
-    workchain = WorkflowFactory(entry_point)
+    workchain = load_process_class(entry_point)
     spec_inputs = workchain.spec().inputs
     errors: list[dict[str, Any]] = []
     signature = None
@@ -461,7 +472,7 @@ def _execute(mode: str, params: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("entry_point is required")
 
     if mode == "spec":
-        workchain = WorkflowFactory(entry_point)
+        workchain = load_process_class(entry_point)
         return {
             "entry_point": entry_point,
             "inputs": _serialize_port(workchain.spec().inputs).get("ports", {}),

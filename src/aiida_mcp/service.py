@@ -48,6 +48,29 @@ class AiiDAService:
     async def provenance_node_detail(self, group_uuid: str, uuid: str) -> dict[str, Any]: return await self._call("provenance.node_detail", {"group_uuid": group_uuid, "uuid": uuid})
     async def archive_inspect(self, path: str) -> dict[str, Any]: return await self._call("archive.inspect", {"path": str(path)})
 
+    # Processes
+    async def process_list(self, *, limit: int = 20, process_state: str | None = None, label: str | None = None, root_only: bool = True, days: int | None = None, group_uuid: str | None = None) -> dict[str, Any]:
+        params: dict[str, Any] = {"limit": max(1, min(int(limit), 200)), "node_type": "ProcessNode", "root_only": bool(root_only)}
+        for key, value in {"process_state": process_state, "label": label, "days": days, "group_uuid": group_uuid}.items():
+            if value not in (None, ""): params[key] = value
+        return await self._call("node.recent", params)
+    async def process_control(self, action: str, identifiers: list[str], *, force: bool = False) -> dict[str, Any]:
+        return await self._call("process.control", {"action": action, "identifiers": [str(item) for item in identifiers], "force": bool(force)})
+
+    # Workflows and submission
+    async def workflow_catalog(self) -> dict[str, Any]: return await self._call("workflow.catalog")
+    async def workflow_spec(self, entry_point: str) -> dict[str, Any]: return await self._call("submission.spec", {"entry_point": str(entry_point)})
+    async def workflow_input_candidates(self, entry_point: str, port_path: str, *, limit: int = 50) -> dict[str, Any]:
+        return await self._call("workflow.input_candidates", {"entry_point": str(entry_point), "port_path": str(port_path), "limit": max(1, min(int(limit), 200))})
+    async def code_list(self, computer_label: str | None = None) -> dict[str, Any]:
+        return await self._call("code.list", {"computer_label": computer_label} if computer_label else {})
+    async def submission_draft(self, draft: dict[str, Any]) -> dict[str, Any]: return await self._call("submission.builder_draft", dict(draft))
+    async def submission_submit(self, draft: dict[str, Any]) -> dict[str, Any]: return await self._call("submission.submit", {"draft": dict(draft)})
+
+    # Plugins (loaded inside the worker from the `aiida_mcp.tools` entry-point group)
+    async def plugin_manifest(self) -> dict[str, Any]: return await self._call("plugins.manifest")
+    async def plugin_call(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]: return await self._call("plugins.call", {"tool": tool, "arguments": dict(arguments)})
+
     async def _call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         runtime = Runtime("configured-runtime", self.runtime.python_interpreter_path, self.runtime.aiida_profile, self.runtime.workspace_path)
         return await self.workers.request(runtime, method, params)

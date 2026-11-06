@@ -21,7 +21,7 @@ start() {
   fi
   if [[ ! -x "${PYTHON_BIN}" ]]; then echo "Missing ${PYTHON_BIN}. Run: (cd ${MCP_DIR} && uv sync)" >&2; exit 1; fi
   PYTHONPATH="${MCP_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-    nohup "${PYTHON_BIN}" -m aiida_mcp.server >"${LOG_FILE}" 2>&1 &
+    nohup "${PYTHON_BIN}" -m aiida_mcp serve >"${LOG_FILE}" 2>&1 &
   echo "$!" >"${PID_FILE}"
   for _ in {1..30}; do
     if is_ready; then echo "AiiDA MCP is ready at ${URL}"; return; fi

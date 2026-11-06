@@ -107,7 +107,14 @@ class AiiDAWorkerService:
             "registry.list": self._registry_list,
             "registry.register": self._registry_register,
             "registry.execute": self._registry_execute,
+            "code.list": self._code_list,
+            "process.control": self._process_control,
+            "plugins.manifest": self._plugins_manifest,
+            "plugins.call": self._plugins_call,
         }
+        from aiida_mcp.worker.application.plugin_service import PluginRegistry
+
+        self._plugins = PluginRegistry()
 
     @property
     def methods(self) -> tuple[str, ...]:
@@ -481,27 +488,68 @@ class AiiDAWorkerService:
         computer_label = params.get("computer_label")
         if not computer_label or not isinstance(computer_label, str):
             raise ValueError("computer_label parameter is required")
+        return AiiDAWorkerService._code_list({"computer_label": computer_label})
+
+    @staticmethod
+    def _code_list(params: dict[str, Any]) -> Mapping[str, Any]:
         from aiida_mcp.core.engine import ensure_profile_loaded, orm
         ensure_profile_loaded()
-        computer = orm.Computer.collection.get(label=computer_label)
-        query = orm.QueryBuilder().append(orm.Computer, filters={"uuid": computer.uuid}, tag="computer")
-        # QueryBuilder widens AbstractCode to every `data.core.%` node (RemoteData too), so filter by class here.
-        query.append(orm.Data, with_computer="computer", filters={"node_type": {"!like": "data.core.remote.%"}}, project="*")
-        codes = [node for node in query.all(flat=True) if isinstance(node, orm.AbstractCode)]
+        query = orm.QueryBuilder()
+        computer_label = params.get("computer_label")
+        computer_filters = {"label": str(computer_label)} if computer_label else {}
+        query.append(orm.Computer, filters=computer_filters, tag="computer", project="label")
+        # QueryBuilder widens AbstractCode to every `data.core.%` node (RemoteData too):
+        # narrow in SQL, then keep only real code classes.
+        query.append(orm.Data, with_computer="computer", filters={"node_type": {"like": "%code%"}}, project="*")
         result = []
-        for code in codes:
+        for computer, code in query.all():
+            if not isinstance(code, orm.AbstractCode):
+                continue
             result.append({
                 "pk": int(code.pk),
                 "label": str(code.label),
+                "full_label": str(getattr(code, "full_label", "") or f"{code.label}@{computer}"),
+                "computer": computer,
                 "description": str(code.description) if code.description else None,
                 "default_calc_job_plugin": str(getattr(code, "default_calc_job_plugin", "") or ""),
                 "remote_abspath": str(getattr(code, "filepath_executable", "") or ""),
-                "prepend_text": str(code.get_prepend_text()) if hasattr(code, "get_prepend_text") else None,
-                "append_text": str(code.get_append_text()) if hasattr(code, "append_text") else None,
+                "prepend_text": str(code.prepend_text) if hasattr(code, "prepend_text") else None,
+                "append_text": str(code.append_text) if hasattr(code, "append_text") else None,
                 "with_mpi": bool(getattr(code, "with_mpi", False)),
                 "use_double_quotes": bool(getattr(code, "use_double_quotes", False)),
+                "hidden": bool(code.is_hidden) if hasattr(code, "is_hidden") else False,
             })
-        return {"codes": result}
+        return {"codes": sorted(result, key=lambda item: item["pk"])}
+
+    @staticmethod
+    def _process_control(params: dict[str, Any]) -> Mapping[str, Any]:
+        from aiida.engine.processes import control
+        from aiida_mcp.core.engine import ensure_profile_loaded, orm
+        ensure_profile_loaded()
+        action = str(params.get("action") or "").strip().lower()
+        actions = {"kill": control.kill_processes, "pause": control.pause_processes, "play": control.play_processes}
+        if action not in actions:
+            raise ValueError("action must be one of: kill, pause, play")
+        identifiers = params.get("identifiers") or []
+        if not isinstance(identifiers, list) or not identifiers:
+            raise ValueError("identifiers must be a non-empty list of process PKs or UUIDs")
+        nodes = []
+        for identifier in identifiers:
+            node = orm.load_node(int(identifier) if str(identifier).isdigit() else str(identifier))
+            if not isinstance(node, orm.ProcessNode):
+                raise ValueError(f"Node {identifier} is not a process")
+            nodes.append(node)
+        kwargs: dict[str, Any] = {"timeout": float(params.get("timeout", 5.0))}
+        if action == "kill":
+            kwargs["force"] = bool(params.get("force", False))
+        actions[action](nodes, **kwargs)
+        return {
+            "action": action,
+            "processes": [
+                {"pk": int(node.pk), "process_state": getattr(node.process_state, "value", None), "paused": bool(node.paused)}
+                for node in nodes
+            ],
+        }
 
     @staticmethod
     def _infrastructure_inspect_v2(_: dict[str, Any]) -> Mapping[str, Any]:
@@ -627,6 +675,13 @@ class AiiDAWorkerService:
             mode="workgraph_submit",
             payload=params,
         )
+
+    def _plugins_manifest(self, _: dict[str, Any]) -> Mapping[str, Any]:
+        return self._plugins.manifest()
+
+    def _plugins_call(self, params: dict[str, Any]) -> Mapping[str, Any]:
+        arguments = params.get("arguments")
+        return self._plugins.call(str(params.get("tool") or ""), dict(arguments) if isinstance(arguments, Mapping) else {})
 
     @staticmethod
     def _process_detail(params: dict[str, Any]) -> Mapping[str, Any]:

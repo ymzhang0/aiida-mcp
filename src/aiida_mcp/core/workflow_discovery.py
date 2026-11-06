@@ -10,6 +10,7 @@ from aiida.plugins import WorkflowFactory
 from aiida.plugins.entry_point import get_entry_point_names
 
 from aiida_mcp.core.engine import ensure_profile_loaded
+from aiida_mcp.core.submission import load_process_class
 from aiida_mcp.core.utils import serialize_spec, to_jsonable, type_to_string
 
 
@@ -127,7 +128,7 @@ def input_port_candidates(
 ) -> dict[str, Any]:
     """Return stored AiiDA entities compatible with one concrete input port."""
     ensure_profile_loaded()
-    process_class = WorkflowFactory(entry_point)
+    process_class = load_process_class(entry_point)
     port = _resolve_port(process_class, port_path)
     valid_type = getattr(port, "valid_type", None)
     classes = _candidate_classes(valid_type)

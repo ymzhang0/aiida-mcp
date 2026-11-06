@@ -149,7 +149,10 @@ class _WorkerProcess:
             error = response.get("error")
             if isinstance(error, dict):
                 detail = error.get("data") if isinstance(error.get("data"), dict) else {}
-                raise WorkerRuntimeError(str(error.get("message") or "AiiDA worker request failed"), status_code=int(detail.get("status_code", 422)), detail=detail)
+                message = str(error.get("message") or "AiiDA worker request failed")
+                if detail.get("reason"):
+                    message = f"{message}: {detail['reason']}"
+                raise WorkerRuntimeError(message, status_code=int(detail.get("status_code", 422)), detail=detail)
             result = response.get("result")
             if not isinstance(result, dict):
                 raise WorkerRuntimeError("AiiDA worker returned an invalid result")

@@ -35,7 +35,8 @@ _NODE_CLASS_MAP: dict[str, type[Node]] = {
 }
 
 
-_RECENT_NODES_CACHE_TTL_SECONDS = 300
+# Short: agents poll process state. Stale entries still serve as a fallback when the DB is locked.
+_RECENT_NODES_CACHE_TTL_SECONDS = 5
 _RECENT_NODES_CACHE_MAX_ITEMS = 100
 _RECENT_NODES_CACHE_LOCK = threading.RLock()
 _RECENT_NODES_CACHE: dict[tuple[int, str | None, str | None, str | None, str | None, bool, float | None], tuple[float, list[dict[str, Any]]]] = {}
