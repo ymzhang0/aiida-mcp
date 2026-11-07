@@ -82,16 +82,23 @@ def build_mcp_server(service: AiiDAService, *, allow_write: bool = False, plugin
         return result if detail == "full" else compact_process(result)
     @tool(name="get_workgraph", description="Read the call graph of an aiida-workgraph WorkGraph process.", annotations=_READ_ONLY)
     async def process_workgraph(identifier: str) -> dict[str, Any]: return await service.process_workgraph(identifier)
-    @tool(name="wait_for_process", description="Block until a process terminates or timeout_seconds passes (max 1800), then return its state, exit status/message, and output names. Use this instead of calling get_process repeatedly. For HPC jobs that may queue for hours, use a modest timeout and tell the user the PK.", annotations=_READ_ONLY)
-    async def wait_for_process(identifier: str, timeout_seconds: int = 300) -> dict[str, Any]: return await service.wait_for_process(identifier, timeout_seconds=timeout_seconds)
+    async def _wait_with_result(identifier: str, timeout_seconds: int) -> dict[str, Any]:
+        state = await service.wait_for_process(identifier, timeout_seconds=timeout_seconds)
+        if state.get("terminated"):
+            result = compact_process(await service.process_get(identifier))
+            return {"timed_out": False, **{key: value for key, value in result.items() if key != "note"}}
+        return state
+
+    @tool(name="wait_for_process", description="Block until a process terminates or timeout_seconds passes (max 1800). When it has terminated, returns the same compact view as get_process (state, exit status, output values such as the energy), so no get_process call is needed. On timeout returns the current state. For HPC jobs that may queue for hours, use a modest timeout and tell the user the PK.", annotations=_READ_ONLY)
+    async def wait_for_process(identifier: str, timeout_seconds: int = 300) -> dict[str, Any]: return await _wait_with_result(identifier, timeout_seconds)
     @tool(name="get_process_logs", description="Read process reports and scheduler stderr excerpt by PK or UUID.", annotations=_READ_ONLY)
     async def process_logs(identifier: str) -> dict[str, Any]: return await service.process_logs(identifier)
 
     # Workflows, codes, submission drafting
     @tool(name="list_workflows", description="List installed workflow entry points with their description, protocols, and required inputs.", annotations=_READ_ONLY)
     async def workflow_list() -> dict[str, Any]: return await service.workflow_catalog()
-    @tool(name="get_workflow_spec", description="Read the full input port specification of a workflow or calculation entry point (e.g. 'quantumespresso.pw.base' or 'core.arithmetic.add').", annotations=_READ_ONLY)
-    async def workflow_spec(entry_point: str) -> dict[str, Any]: return await service.workflow_spec(entry_point)
+    @tool(name="get_workflow_spec", description="Inputs of a workflow or calculation entry point (e.g. 'quantumespresso.pw.base'), one line per port, plus its protocols and get_builder_from_protocol arguments. Not needed when you submit with a protocol and already know the arguments. Pass port_path to expand a namespace.", annotations=_READ_ONLY)
+    async def workflow_spec(entry_point: str, port_path: str | None = None) -> dict[str, Any]: return compact_spec(await service.workflow_spec(entry_point), port_path)
     @tool(name="find_input_candidates", description="List stored nodes compatible with one input port, e.g. port_path='pw.structure'.", annotations=_READ_ONLY)
     async def workflow_input_candidates(entry_point: str, port_path: str, limit: int = 50) -> dict[str, Any]: return await service.workflow_input_candidates(entry_point, port_path, limit=limit)
     @tool(name="list_codes", description="List configured codes, optionally only those on one computer. Use full_label ('label@computer') as a code input.", annotations=_READ_ONLY)
@@ -129,9 +136,12 @@ def build_mcp_server(service: AiiDAService, *, allow_write: bool = False, plugin
         async def code_create(fields: dict[str, Any] | None = None, yaml: str | None = None) -> dict[str, Any]:
             return await service.code_create({"fields": dict(fields or {}), "yaml": yaml})
 
-        @tool(name="submit", description="Submit a workflow or calculation to the AiiDA daemon. Takes the same arguments as validate_submission; run that first. Optional `label` and `description` are set on the process node, and `group` (a label; created if missing) receives it, so related runs stay together. Returns the new process PK.", annotations=_WRITE)
-        async def submit(entry_point: str, inputs: dict[str, Any] | None = None, protocol: str | None = None, protocol_arguments: dict[str, Any] | None = None, overrides: dict[str, Any] | None = None, label: str | None = None, description: str | None = None, group: str | None = None) -> dict[str, Any]:
-            return await service.submission_submit(_draft(entry_point, inputs, protocol, protocol_arguments, overrides, label=label, description=description, group=group))
+        @tool(name="submit", description="Validate and submit a workflow or calculation to the AiiDA daemon; invalid inputs are reported back and nothing is submitted, so a separate validate_submission call is only needed to preview. Same arguments as validate_submission, plus optional `label`, `description`, and `group` (a label; created if missing). With wait_seconds > 0 it also waits up to that long and returns the result (as wait_for_process does), so a short job needs one call.", annotations=_WRITE)
+        async def submit(entry_point: str, inputs: dict[str, Any] | None = None, protocol: str | None = None, protocol_arguments: dict[str, Any] | None = None, overrides: dict[str, Any] | None = None, label: str | None = None, description: str | None = None, group: str | None = None, wait_seconds: int = 0) -> dict[str, Any]:
+            submitted = await service.submission_submit(_draft(entry_point, inputs, protocol, protocol_arguments, overrides, label=label, description=description, group=group))
+            if wait_seconds > 0 and submitted.get("pk"):
+                return {"submitted": submitted, **(await _wait_with_result(str(submitted["pk"]), wait_seconds))}
+            return submitted
         @tool(name="kill_processes", description="Kill running or waiting processes (PKs or UUIDs). Irreversible.", annotations=_DESTRUCTIVE)
         async def process_kill(identifiers: list[str], force: bool = False) -> dict[str, Any]: return await service.process_control("kill", identifiers, force=force)
         @tool(name="pause_processes", description="Pause running or waiting processes (PKs or UUIDs).", annotations=_WRITE)
@@ -186,6 +196,56 @@ def _compact_entry(entry: Any) -> Any:
     if label and label not in (out["type"], entry.get("type"), str(out.get("value"))):
         out["label"] = label
     return {key: value for key, value in out.items() if value is not None}
+
+
+_OPTION_HINT = "resources, max_wallclock_seconds, queue_name, account, withmpi, prepend_text, custom_scheduler_commands"
+
+
+def _port_line(port: dict[str, Any]) -> str:
+    kinds = [kind for kind in port.get("valid_type") or [] if kind != "NoneType"]
+    parts = ["/".join(kinds) or "any"]
+    if port.get("required"):
+        parts.append("required")
+    if "default" in port and "<function" not in str(port["default"]):
+        parts.append(f"default={port['default']!r}"[:60])
+    if port.get("help"):
+        parts.append(str(port["help"]).split(". ")[0][:100])
+    return " | ".join(parts)
+
+
+def _compact_ports(ports: dict[str, Any], depth: int) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for name, port in ports.items():
+        if not isinstance(port, dict):
+            continue
+        if port.get("type") == "namespace":
+            if name == "metadata":
+                out[name] = f"namespace; options: {_OPTION_HINT}"
+            elif depth <= 0:
+                children = port.get("ports") or {}
+                required = [child for child, spec in children.items() if isinstance(spec, dict) and spec.get("required")]
+                out[name] = f"namespace of {len(children)} ports" + (f"; required: {', '.join(required)}" if required else "")
+            else:
+                out[name] = _compact_ports(port.get("ports") or {}, depth - 1)
+        else:
+            out[name] = _port_line(port)
+    return out
+
+
+def compact_spec(spec: dict[str, Any], port_path: str | None = None) -> dict[str, Any]:
+    ports = spec.get("inputs") or {}
+    if port_path:
+        for part in port_path.split("."):
+            node = ports.get(part)
+            if not isinstance(node, dict):
+                raise ValueError(f"No input port {port_path!r}")
+            ports = node.get("ports") or {part: node}
+    out = {"entry_point": spec.get("entry_point"), "inputs": _compact_ports(ports, depth=1)}
+    for key in ("protocols", "protocol_arguments"):
+        if spec.get(key):
+            out[key] = spec[key]
+    out["note"] = "Compact spec; pass port_path (e.g. 'pw') to expand a namespace."
+    return out
 
 
 def compact_process(detail: dict[str, Any]) -> dict[str, Any]:

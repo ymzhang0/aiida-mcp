@@ -653,9 +653,23 @@ class AiiDAWorkerService:
         entry_point = params.get("entry_point")
         if not entry_point or not isinstance(entry_point, str):
             raise ValueError("entry_point parameter is required")
-        from aiida_mcp.core.submission import get_submission_spec
+        import inspect as _inspect
+
+        from aiida_mcp.core.submission import get_submission_spec, load_process_class
+        from aiida_mcp.core.workflow_discovery import _supported_protocols
         res = get_submission_spec(entry_point=entry_point)
-        return {"entry_point": entry_point, "inputs": dict(res.get("inputs") or {})}
+        payload: dict[str, Any] = {"entry_point": entry_point, "inputs": dict(res.get("inputs") or {})}
+        process_class = load_process_class(entry_point)
+        payload["protocols"] = _supported_protocols(process_class)
+        getter = getattr(process_class, "get_builder_from_protocol", None)
+        if callable(getter):
+            arguments = {}
+            for name, parameter in _inspect.signature(getter).parameters.items():
+                if name in {"cls", "self"} or parameter.kind in {_inspect.Parameter.VAR_POSITIONAL, _inspect.Parameter.VAR_KEYWORD}:
+                    continue
+                arguments[name] = "required" if parameter.default is _inspect.Parameter.empty else f"default={parameter.default!r}"[:80]
+            payload["protocol_arguments"] = arguments
+        return payload
 
     @staticmethod
     def _submission_validate(params: dict[str, Any]) -> Mapping[str, Any]:

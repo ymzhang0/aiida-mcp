@@ -1,116 +1,30 @@
 ---
 name: aiida
-description: Work with the user's AiiDA profile through the aiida MCP tools - check on calculations and workflows, find out why one failed, find a workflow and submit it, kill/pause/resume processes, or set up a cluster (computer) and register codes. Use when the user mentions AiiDA, verdi, a process PK, a WorkChain or CalcJob, a calculation or job they ran, or asks to run or submit a simulation (Quantum ESPRESSO, EPW, Wannier90, ...), or to configure a cluster or code for AiiDA.
+description: Work with the user's AiiDA profile through the aiida MCP tools - check on calculations and workflows, find out why one failed, find a structure in MC3D/MC2D/Materials Project, submit workflows, kill/pause/resume processes, or set up a cluster (computer) and register codes. Use when the user mentions AiiDA, verdi, a process PK, a WorkChain or CalcJob, a calculation or job they ran, or asks to run or submit a simulation (Quantum ESPRESSO, EPW, Wannier90, ...), or to configure a cluster or code for AiiDA.
 ---
 
 # Working with AiiDA
 
-The `aiida` MCP server is bound to one Python environment and one AiiDA profile,
-chosen when the plugin was configured. Call `get_status` first if you
-are unsure which profile is active or whether the daemon is running.
+The tools are bound to one AiiDA profile. Work in as few calls as possible:
+skip lookups for anything the user already gave you (code label, structure,
+parameters), and call independent tools in the same turn.
 
-## Checking on work
+## Check on work
+- `list_processes` (filter by `process_state`, `label`, `days`; `root_only: false` includes children), then `get_process` (compact; `detail="full"` only if something is missing).
+- A failure: `diagnose_process` if available, otherwise `get_process_logs` on the failing child. `finished` with exit 0 means success, non-zero means a handled failure, `excepted` means a crash. Always report the exit status and the reason (`exit_message`, `process_status`).
 
-1. `list_processes`: newest first. Filter with `process_state`
-   (`created`, `waiting`, `running`, `finished`, `excepted`, `killed`), `label`
-   (a substring of the process label, or a PK), or `days`. The default lists only
-   top-level processes; pass `root_only: false` to include sub-processes.
-2. `get_process <pk>`: state, exit status, inputs, outputs, called
-   sub-processes.
-3. For a failure, use `diagnose_process <pk>` if available (with
-   `include_outputs: true` for stdout/stderr excerpts). It walks the sub-process
-   tree to the failing calculation and explains why it failed. Otherwise use
-   `get_process_logs` on the failing sub-process.
+## Run work
+1. Structure: `search_structures` (`mc3d` = AiiDA-relaxed PBE bulk, sorted by energy per atom; `mc2d` = 2D layers; `mp`), then `import_structure`; or `create_structure` (`bulk`, a project `file`, or `cell` + `sites`); or an existing PK.
+2. Inputs: for a workflow with protocols, use `protocol` + `protocol_arguments` (e.g. `{"code": "pw@cluster", "structure": {"pk": N}, "options": {"resources": {"num_machines": 1, "num_mpiprocs_per_machine": 1}, "queue_name": "...", "max_wallclock_seconds": 600, "withmpi": false}}`), plus `overrides` such as `{"pseudo_family": "SSSP/1.3/PBE/efficiency", "pw": {"parameters": {"SYSTEM": {"ecutrho": 360}}}}`. Call `get_workflow_spec` only when you do not know the inputs. Base values are plain JSON, stored nodes are `{"pk": N}`, and codes are `label@computer`.
+3. **Confirm the entry point, code, key inputs, and resources with the user** unless they already confirmed them.
+4. `submit` with a `label` and a `group` that keeps related runs together. `submit` validates the inputs itself. For a job expected to finish within minutes, pass `wait_seconds` (e.g. 900): one call returns the result, with the energy in `outputs.output_parameters.value`. For longer jobs, report the PK and use `wait_for_process` later, which also returns the result.
+5. If it failed, diagnose it and explain the cause in physical terms. Propose one concrete fix and confirm it before resubmitting.
 
-`finished` with `exit_status` 0 means success. `finished` with a non-zero exit
-status is a failure handled by the workflow. `excepted` means the process
-crashed. Always report the exit status, not only the state.
+## Control work
+Before `kill_processes`, confirm the PKs with the user; killing a workflow kills its children. `pause_processes` and `resume_processes` can be undone.
 
-## Running work
-
-Always follow this order:
-
-1. `list_workflows` to find the entry point (e.g. `quantumespresso.pw.base`).
-2. `get_workflow_spec` to read its inputs. Calculations such as
-   `core.arithmetic.add` work too.
-3. Resolve the inputs:
-   - Codes: `list_codes`, then pass the `full_label` (`pw@cluster`).
-   - Existing structures and other nodes: `find_input_candidates` with
-     the `port_path` (e.g. `pw.structure`), then pass `{"pk": N}`.
-   - A known material: `search_structures` on `mc3d` (AiiDA-relaxed PBE
-     bulk, sorted by energy per atom), `mc2d` (2D layers), or `mp`, then
-     `import_structure` with the chosen id. The source is recorded on the
-     node, and importing the same entry twice reuses it.
-   - Otherwise `create_structure`, then pass its `{"pk": N}`. Use `bulk` for standard crystals, e.g.
-     `{"name": "Si", "crystalstructure": "diamond", "a": 5.43}`, or `file` for
-     a CIF/POSCAR in the project. Check the returned formula and volume.
-   - Base values are plain JSON: `2` becomes Int, `"x"` becomes Str, and
-     `{"ecutwfc": 40}` becomes Dict.
-   - If the workflow lists `protocols`, prefer `protocol` + `protocol_arguments`
-     (e.g. `{"code": "pw@cluster", "structure": {"pk": 12}}`) over hand-written
-     `inputs`.
-   - Calculations need `metadata.options.resources`, e.g.
-     `{"num_machines": 1, "num_mpiprocs_per_machine": 1}`. HPC schedulers usually
-     also need `max_wallclock_seconds`, and often `account` or `queue_name`.
-4. `validate_submission` with exactly the arguments you intend to submit. It
-   validates without storing anything. Fix every reported error before
-   continuing.
-5. **Show the user the entry point, the code/computer, the key inputs, and the
-   resources, and get their confirmation.** Submitting uses real compute time.
-6. `submit` with the same arguments plus a `label` and a `group` that
-   keeps related runs together (e.g. `si/scf-convergence`), then report the
-   returned PK. Read results from `get_process` (compact by default: the
-   energy is in `outputs.output_parameters.value`); use `detail="full"`
-   only when something is missing.
-7. Follow progress with `wait_for_process`, not repeated `get_process`
-   calls. HPC jobs can queue for hours. If it times out, give the user the PK
-   and the current state.
-8. If it failed, run `diagnose_process` (or `get_process` and
-   `get_process_logs`) and explain the cause in physical terms, for example
-   "integrated charge is wrong: ecutrho too low for this pseudopotential".
-   Propose a concrete fix, such as an `overrides` change, and confirm it
-   before resubmitting.
-
-## Controlling work
-
-`kill_processes` is irreversible. Confirm the PKs with the user first, and
-say whether they are top-level workflows (killing them kills their children).
-`pause_processes` / `resume_processes` are safe to undo.
-
-## Setting up a cluster and codes
-
-Registering a code means telling AiiDA where an existing executable is. These
-tools do not compile or install software.
-
-1. `list_computers` shows what already exists. Reuse an existing computer
-   when it fits. Existing computers and codes cannot be changed here.
-2. `list_ssh_hosts` lists the user's SSH aliases. For `core.ssh_async`, set
-   `host` to the alias so the user's ~/.ssh/config (ProxyJump, key) applies.
-   For `core.ssh`, copy `username`, `proxy_jump`, and `key_filename`. Never ask
-   for or read private keys or passwords.
-3. Ask the user for whatever you cannot know: the scheduler (usually
-   `core.slurm`), a scratch `work_dir` (`{username}` is substituted), the MPI
-   launcher (`srun` or `mpirun -np {tot_num_mpiprocs}`), cores per node, and
-   any `prepend_text` (modules, `export` lines). If the cluster has a
-   verdi-style YAML (for example from aiida-code-registry), pass it as
-   `setup_yaml` / `configure_yaml`.
-4. **Confirm the settings with the user**, then call `create_computer`.
-   It tests the connection first and stores nothing if the test fails. A
-   `Permission denied` error usually means the key needs an ssh-agent or a
-   passphrase-less key. Tell the user; do not retry blindly.
-5. `check_code` with the executable name (e.g. `pw.x`) and the module
-   loads in `prepend_text` (e.g. `module load QuantumESPRESSO/7.2`). Iterate
-   with the user until it is found.
-6. **Confirm**, then call `create_code` with `default_calc_job_plugin`
-   (e.g. `quantumespresso.pw`), `with_mpi`, and the same `prepend_text`. It
-   re-checks the executable and stores the resolved absolute path.
-7. Before the first real submission, suggest a tiny test calculation.
+## Clusters and codes (create-only)
+`list_computers`, then `list_ssh_hosts` (for `core.ssh_async` set `host` to the alias; never read keys or passwords). Ask the user for the scheduler, `work_dir`, MPI launcher, cores per node, and modules. **Confirm**, then `create_computer`: it tests the connection and stores nothing on failure (`Permission denied` usually means an ssh-agent is needed). `check_code` with the module loads in `prepend_text`, then **confirm** and `create_code`.
 
 ## Limits
-
-- Submission needs the AiiDA daemon. If `get_status` reports
-  `daemon_status: false`, ask the user to run `verdi daemon start`. If it
-  reports `daemon_warning` (packages changed since the daemon started), ask
-  for `verdi daemon restart` before submitting. Otherwise newly installed
-  plugins can fail inside the daemon.
-- If submission tools are missing, the server runs in read-only mode.
+If `get_status` shows `daemon_status: false`, or a `daemon_warning`, ask for `verdi daemon start` or `verdi daemon restart` before submitting. Missing write tools mean the server is in read-only mode.
