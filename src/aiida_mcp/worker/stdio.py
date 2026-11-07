@@ -54,4 +54,8 @@ async def serve_stdio(
 
 
 def main() -> None:
-    raise SystemExit(asyncio.run(serve_stdio()))
+    # stdout is the JSON-RPC channel. Plugins and libraries print() (e.g. aiida-wannier90-workflows prints a
+    # summary while building), which would corrupt it, so everything else that writes to stdout goes to stderr.
+    channel = sys.stdout
+    sys.stdout = sys.stderr
+    raise SystemExit(asyncio.run(serve_stdio(output_stream=channel)))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import enum
 import inspect
 from typing import Any, Mapping
 
@@ -126,9 +127,26 @@ def _load_code_like(value: Any) -> Any:
     return _load_node_like(value)
 
 
+def _coerce_enum(value: Any, parameter: inspect.Parameter | None) -> Any:
+    """'SCDM' -> WannierProjectionType.SCDM when the parameter's default (or annotation) is an Enum."""
+    if parameter is None or not isinstance(value, str):
+        return _MISSING
+    enum_type = type(parameter.default) if isinstance(parameter.default, enum.Enum) else parameter.annotation
+    if not (isinstance(enum_type, type) and issubclass(enum_type, enum.Enum)):
+        return _MISSING
+    for member in enum_type:
+        if value.strip().upper() in {member.name.upper(), str(member.value).upper()}:
+            return member
+    raise ValueError(f"{value!r} is not one of {', '.join(member.name for member in enum_type)}")
+
+
 def _coerce_argument(name: str, value: Any, port: Any = None) -> Any:
     if value is None:
         return None
+    if _is_node_reference(value):
+        return _load_node_like(value)
+    if str(name).lower().endswith("codes") and isinstance(value, Mapping):
+        return {str(key): _load_code_like(item) for key, item in value.items()}
 
     valid_types = _extract_valid_types(port)
     abstract_code = getattr(orm, "AbstractCode", None)
@@ -344,6 +362,43 @@ def _serialize_port(port: Any) -> dict[str, Any]:
     return payload
 
 
+def _apply_builder_edits(builder: Any, calcjob_options: Mapping[str, Any], updates: Mapping[str, Any]) -> list[str]:
+    """Apply options to every calculation in the builder, then set dotted-path values."""
+    from aiida.engine.processes.builder import ProcessBuilderNamespace
+
+    touched: list[str] = []
+
+    def walk(namespace: Any, path: str) -> None:
+        for key in list(namespace):
+            value = namespace[key]
+            if isinstance(value, ProcessBuilderNamespace) and key != "metadata":
+                walk(value, f"{path}.{key}" if path else key)
+        port_namespace = getattr(namespace, "_port_namespace", {})
+        metadata_port = port_namespace.get("metadata") if hasattr(port_namespace, "get") else None
+        if namespace.get("code") is not None and isinstance(metadata_port, PortNamespace) and "options" in metadata_port:
+            for option, value in calcjob_options.items():
+                namespace.metadata.options[option] = value
+            touched.append(path or "<root>")
+        elif namespace.get("code") is not None and isinstance(namespace.get("options"), orm.Dict):
+            namespace.options = orm.Dict({**namespace["options"].get_dict(), **dict(calcjob_options)})
+            touched.append(f"{path}.options" if path else "options")
+
+    if calcjob_options:
+        walk(builder, "")
+    for dotted, value in updates.items():
+        parts = str(dotted).split(".")
+        namespace = builder
+        for part in parts[:-1]:
+            namespace = namespace[part]
+        port = namespace._port_namespace.get(parts[-1]) if hasattr(namespace, "_port_namespace") else None
+        existing = namespace.get(parts[-1]) if hasattr(namespace, "get") else None
+        if isinstance(existing, orm.Dict) and isinstance(value, Mapping):
+            value = {**existing.get_dict(), **dict(value)}  # merge into an existing Dict, e.g. settings
+        namespace[parts[-1]] = _coerce_argument(parts[-1], value, port)
+        touched.append(str(dotted))
+    return touched
+
+
 def _build_builder_result(params: Mapping[str, Any]) -> dict[str, Any]:
     entry_point = str(params.get("entry_point") or "").strip()
     protocol = params.get("protocol")
@@ -408,7 +463,8 @@ def _build_builder_result(params: Mapping[str, Any]) -> dict[str, Any]:
                     continue
                 port = spec_inputs.get(name)
                 try:
-                    kwargs[name] = _coerce_argument(name, raw_value, port)
+                    as_enum = _coerce_enum(raw_value, parameter)
+                    kwargs[name] = as_enum if as_enum is not _MISSING else _coerce_argument(name, raw_value, port)
                 except Exception as exc:
                     errors.append(
                         {
@@ -417,6 +473,11 @@ def _build_builder_result(params: Mapping[str, Any]) -> dict[str, Any]:
                             "message": str(exc),
                         }
                     )
+            if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()):
+                # Extra protocol arguments are forwarded through **kwargs (e.g. to sub-process builders).
+                for name, raw_value in intent_data.items():
+                    if name not in signature.parameters and name not in kwargs:
+                        kwargs[name] = _coerce_argument(name, raw_value, spec_inputs.get(name))
             if signature is not None and "overrides" not in signature.parameters and overrides:
                 errors.append(
                     {
@@ -431,6 +492,13 @@ def _build_builder_result(params: Mapping[str, Any]) -> dict[str, Any]:
                     builder_inputs = builder._inputs(prune=True)
                 except Exception as exc:
                     errors.append({"stage": "get_builder_from_protocol", "message": str(exc)})
+
+    if builder is not None and not errors and (params.get("calcjob_options") or params.get("builder_updates")):
+        try:
+            _apply_builder_edits(builder, params.get("calcjob_options") or {}, params.get("builder_updates") or {})
+            builder_inputs = builder._inputs(prune=True)
+        except Exception as exc:
+            errors.append({"stage": "builder_updates", "message": str(exc)})
 
     missing_ports = _list_missing_required_ports(spec_inputs, builder_inputs)
     for missing in missing_ports:
@@ -584,6 +652,8 @@ def _normalize_builder_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         "label": normalized.get("label"),
         "description": normalized.get("description"),
         "group": normalized.get("group"),
+        "calcjob_options": dict(normalized.get("calcjob_options") or {}),
+        "builder_updates": dict(normalized.get("builder_updates") or {}),
     }
 
 

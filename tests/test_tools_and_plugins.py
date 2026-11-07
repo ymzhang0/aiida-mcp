@@ -135,3 +135,30 @@ def test_compact_process_keeps_values_and_drops_duplicates() -> None:
     assert compact["called"]["iteration_01"]["type"] == "PwCalculation"
     assert len(compact["reports"]) == 20 and "full_type" not in compact["summary"]
     assert "workchain" not in compact and "direct_outputs" not in compact
+
+
+def test_worker_keeps_stdout_for_json_rpc_when_handlers_print() -> None:
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    import aiida_mcp
+
+    code = (
+        "import sys, asyncio\n"
+        "from aiida_mcp.worker import stdio\n"
+        "from aiida_mcp.worker.service import AiiDAWorkerService\n"
+        "class Noisy(AiiDAWorkerService):\n"
+        "    def __init__(self):\n"
+        "        super().__init__()\n"
+        "        self._handlers['noisy'] = lambda params: (print('chatty plugin output'), {'ok': True})[1]\n"
+        "stdio.AiiDAWorkerService = Noisy\n"
+        "stdio.main()\n"
+    )
+    src = str(Path(aiida_mcp.__file__).resolve().parents[1])
+    done = subprocess.run([sys.executable, "-c", code], input='{"jsonrpc": "2.0", "id": 1, "method": "noisy", "params": {}}\n',
+                          capture_output=True, text=True, timeout=60, env={"PYTHONPATH": src, "PATH": "/usr/bin:/bin"})
+    lines = done.stdout.splitlines()
+    assert len(lines) == 1 and json.loads(lines[0])["result"] == {"ok": True}
+    assert "chatty plugin output" in done.stderr

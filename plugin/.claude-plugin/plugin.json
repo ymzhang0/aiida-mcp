@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "aiida",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Inspect, submit, and manage AiiDA calculations and workflows from your agent.",
   "author": { "name": "Yiming Zhang" },
   "homepage": "https://github.com/ymzhang0/aiida-mcp",
