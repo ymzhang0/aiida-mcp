@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "aiida",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Inspect, submit, and manage AiiDA calculations and workflows from your agent.",
   "author": { "name": "Yiming Zhang" },
   "homepage": "https://github.com/ymzhang0/aiida-mcp",
@@ -19,6 +19,12 @@
       "title": "AiiDA profile",
       "description": "Profile name, as listed by `verdi profile list`",
       "required": true
+    },
+    "aiida_path": {
+      "type": "string",
+      "title": "AiiDA config directory (optional)",
+      "description": "Only if your profile is not in ~/.aiida: the AIIDA_PATH that contains its .aiida folder",
+      "default": ""
     },
     "read_only": {
       "type": "boolean",

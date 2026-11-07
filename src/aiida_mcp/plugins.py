@@ -12,6 +12,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .runtime import worker_environment
 from .service import RuntimeConfig
 
 log = logging.getLogger(__name__)
@@ -28,7 +29,7 @@ def discover_plugin_tools(runtime: RuntimeConfig, *, timeout: float = 120.0) -> 
             [runtime.python_interpreter_path, "-u", str(bootstrap)],
             input="".join(json.dumps(item) + "\n" for item in requests),
             capture_output=True, text=True, timeout=timeout, cwd=runtime.workspace_path,
-            env={**os.environ, "AIIDA_PROFILE": runtime.aiida_profile},
+            env={**os.environ, **worker_environment(runtime.aiida_profile)},
         )
         response = json.loads(completed.stdout.splitlines()[0])
     except (OSError, subprocess.SubprocessError, IndexError, json.JSONDecodeError) as exc:

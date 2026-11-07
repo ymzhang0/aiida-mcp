@@ -20,7 +20,8 @@ _INSTRUCTIONS = """AiiDA tools for the single Python environment and profile sel
 Checking work: list_processes (filter by process_state such as waiting/running/finished/excepted/killed)
 -> get_process / get_process_logs / get_descendants for one process.
 Running work: list_workflows -> get_workflow_spec -> list_codes / find_input_candidates
--> validate_submission (validates, stores nothing) -> submit -> poll get_process.
+(create_structure if no stored structure fits) -> validate_submission (validates, stores nothing) -> submit
+-> wait_for_process (do not poll get_process in a loop). If it failed: get_process / diagnose_process explain why.
 Setting up a cluster: list_ssh_hosts / list_computers -> create_computer (tests the connection
 first, stores nothing on failure) -> check_code -> create_code. Existing computers and codes are never modified.
 Input values: plain JSON for base types (2 -> Int, {"a": 1} -> Dict); reference stored nodes as {"pk": N} or
@@ -79,6 +80,8 @@ def build_mcp_server(service: AiiDAService, *, allow_write: bool = False, plugin
     async def process_get(identifier: str) -> dict[str, Any]: return await service.process_get(identifier)
     @tool(name="get_workgraph", description="Read the call graph of an aiida-workgraph WorkGraph process.", annotations=_READ_ONLY)
     async def process_workgraph(identifier: str) -> dict[str, Any]: return await service.process_workgraph(identifier)
+    @tool(name="wait_for_process", description="Block until a process terminates or timeout_seconds passes (max 1800), then return its state, exit status/message, and output names. Use this instead of calling get_process repeatedly. For HPC jobs that may queue for hours, use a modest timeout and tell the user the PK.", annotations=_READ_ONLY)
+    async def wait_for_process(identifier: str, timeout_seconds: int = 300) -> dict[str, Any]: return await service.wait_for_process(identifier, timeout_seconds=timeout_seconds)
     @tool(name="get_process_logs", description="Read process reports and scheduler stderr excerpt by PK or UUID.", annotations=_READ_ONLY)
     async def process_logs(identifier: str) -> dict[str, Any]: return await service.process_logs(identifier)
 
@@ -106,6 +109,10 @@ def build_mcp_server(service: AiiDAService, *, allow_write: bool = False, plugin
     async def code_check(computer_label: str, executable: str, prepend_text: str | None = None) -> dict[str, Any]: return await service.code_check_executable(computer_label, executable, prepend_text)
 
     if allow_write:
+        @tool(name="create_structure", description="Store a crystal structure (StructureData) and return its PK for use as {\"pk\": N}. Give exactly one of: `bulk` = ASE bulk() parameters, e.g. {\"name\": \"Si\", \"crystalstructure\": \"diamond\", \"a\": 5.43} (primitive cell; add \"cubic\": true for the conventional cell); `file` = workspace-relative CIF/POSCAR/xyz path; or `cell` (3x3, Angstrom) + `sites` [{\"symbol\": \"Si\", \"position\": [x, y, z]}] in Cartesian Angstrom. Optional `supercell` [n1, n2, n3], `label`, `description`.", annotations=_WRITE)
+        async def create_structure(bulk: dict[str, Any] | None = None, file: str | None = None, cell: list[list[float]] | None = None, sites: list[dict[str, Any]] | None = None, pbc: list[bool] | None = None, supercell: list[int] | None = None, label: str | None = None, description: str | None = None) -> dict[str, Any]:
+            params = {"bulk": bulk, "file": file, "cell": cell, "sites": sites, "pbc": pbc, "supercell": supercell, "label": label, "description": description}
+            return await service.create_structure({key: value for key, value in params.items() if value is not None})
         @tool(name="create_computer", description="Create and configure a new AiiDA computer. Tests the connection first and stores nothing if it fails. Never modifies an existing computer. Give `fields` (computer_label, hostname, transport_type such as core.ssh_async/core.ssh/core.local, scheduler_type such as core.slurm, work_dir, mpirun_command, mpiprocs_per_machine, prepend_text, username, proxy_jump, key_filename, ...) and/or verdi-style `setup_yaml` and `configure_yaml`; `fields` win.", annotations=_REMOTE_WRITE)
         async def computer_create(fields: dict[str, Any] | None = None, setup_yaml: str | None = None, configure_yaml: str | None = None) -> dict[str, Any]:
             return await service.computer_create({"fields": dict(fields or {}), "setup_yaml": setup_yaml, "configure_yaml": configure_yaml})

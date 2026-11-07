@@ -315,6 +315,8 @@ def _get_recent_nodes(
         "attributes.exit_status",
         "extras.aris_soft_deleted",
         "ctime",
+        "attributes.process_status",
+        "attributes.exit_message",
     ]
 
     if normalized_group_uuid:
@@ -403,6 +405,8 @@ def _get_recent_nodes(
             continue
         pk, raw_node_type, raw_label, _raw_process_type, raw_process_state, raw_process_label, raw_exit_status, raw_soft_deleted = row[:8]
         raw_ctime = row[8] if len(row) > 8 else None
+        raw_process_status = row[9] if len(row) > 9 else None
+        raw_exit_message = row[10] if len(row) > 10 else None
         if raw_soft_deleted:
             continue
         if root_only and pk in has_caller_pks:
@@ -425,6 +429,8 @@ def _get_recent_nodes(
                 "process_state": process_state_value,
                 "process_label": process_label or None,
                 "exit_status": raw_exit_status,
+                "process_status": raw_process_status or None,
+                "exit_message": raw_exit_message or None,
                 "ctime": _serialize_ctime(raw_ctime),
                 "groups": [],
                 "formula": None,

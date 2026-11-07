@@ -600,6 +600,11 @@ def serialize_node(node: orm.Node) -> dict[str, Any]:
         info["state"] = extract_process_state_value(node)
         info["exit_status"] = getattr(node, "exit_status", None)
         info["process_label"] = str(getattr(node, "process_label", None) or "N/A")
+        # Why a process ended or is waiting: kill messages, scheduler states, exit messages.
+        info["process_status"] = getattr(node, "process_status", None)
+        info["exit_message"] = getattr(node, "exit_message", None)
+        info["paused"] = bool(getattr(node, "paused", False))
+        info["failed"] = bool(getattr(node, "is_failed", False)) or getattr(node, "is_excepted", False) or getattr(node, "is_killed", False)
 
     return info
 

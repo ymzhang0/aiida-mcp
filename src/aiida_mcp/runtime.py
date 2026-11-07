@@ -43,6 +43,15 @@ class Runtime:
         return value
 
 
+def worker_environment(profile: str) -> dict[str, str]:
+    """Environment overrides for a worker: the profile, plus AIIDA_PATH when the server was given one."""
+    env = {"AIIDA_PROFILE": profile}
+    aiida_path = str(os.environ.get("AIIDA_MCP_AIIDA_PATH") or "").strip()
+    if aiida_path:
+        env["AIIDA_PATH"] = aiida_path
+    return env
+
+
 class WorkerRuntimePool:
     """Own private stdio workers; no worker HTTP service exists."""
 
@@ -79,14 +88,19 @@ class WorkerRuntimePool:
             worker = _WorkerProcess(
                 command=[str(interpreter), "-u", str(bootstrap)],
                 cwd=runtime.workspace_path,
-                env={"AIIDA_PROFILE": runtime.aiida_profile},
+                env=worker_environment(runtime.aiida_profile),
                 request_timeout=self.request_timeout,
             )
             await worker.start()
             status = await worker.request("runtime.status", {}, context=runtime.context())
             if str(status.get("profile") or "") != runtime.aiida_profile:
                 await worker.stop()
-                raise WorkerRuntimeError("Worker started with an unexpected AiiDA profile")
+                raise WorkerRuntimeError(
+                    f"AiiDA profile '{runtime.aiida_profile}' could not be loaded in {runtime.python_interpreter_path} "
+                    f"(config dir: {status.get('config_dir') or 'unknown'}; loaded: {status.get('profile') or 'none'}). "
+                    f"{status.get('profile_error') or ''} If the profile lives in another config dir, set AIIDA_PATH for the server.".strip(),
+                    detail={"config_dir": status.get("config_dir"), "profile_error": status.get("profile_error")},
+                )
             self._workers[runtime.key] = worker
             return worker
 

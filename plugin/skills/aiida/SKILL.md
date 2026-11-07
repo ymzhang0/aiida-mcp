@@ -37,6 +37,10 @@ Always follow this order:
    - Codes: `list_codes`, then pass the `full_label` (`pw@cluster`).
    - Existing structures and other nodes: `find_input_candidates` with
      the `port_path` (e.g. `pw.structure`), then pass `{"pk": N}`.
+   - No suitable structure stored: `create_structure`, then pass its
+     `{"pk": N}`. Use `bulk` for standard crystals, e.g.
+     `{"name": "Si", "crystalstructure": "diamond", "a": 5.43}`, or `file` for
+     a CIF/POSCAR in the project. Check the returned formula and volume.
    - Base values are plain JSON: `2` becomes Int, `"x"` becomes Str, and
      `{"ecutwfc": 40}` becomes Dict.
    - If the workflow lists `protocols`, prefer `protocol` + `protocol_arguments`
@@ -51,8 +55,14 @@ Always follow this order:
 5. **Show the user the entry point, the code/computer, the key inputs, and the
    resources, and get their confirmation.** Submitting uses real compute time.
 6. `submit` with the same arguments, then report the returned PK.
-7. To follow progress, call `get_process` again later. Do not poll in a
-   tight loop. HPC jobs can wait in the queue for hours.
+7. Follow progress with `wait_for_process`, not repeated `get_process`
+   calls. HPC jobs can queue for hours. If it times out, give the user the PK
+   and the current state.
+8. If it failed, run `diagnose_process` (or `get_process` and
+   `get_process_logs`) and explain the cause in physical terms, for example
+   "integrated charge is wrong: ecutrho too low for this pseudopotential".
+   Propose a concrete fix, such as an `overrides` change, and confirm it
+   before resubmitting.
 
 ## Controlling work
 
@@ -92,5 +102,8 @@ tools do not compile or install software.
 ## Limits
 
 - Submission needs the AiiDA daemon. If `get_status` reports
-  `daemon_status: false`, ask the user to run `verdi daemon start`.
+  `daemon_status: false`, ask the user to run `verdi daemon start`. If it
+  reports `daemon_warning` (packages changed since the daemon started), ask
+  for `verdi daemon restart` before submitting. Otherwise newly installed
+  plugins can fail inside the daemon.
 - If submission tools are missing, the server runs in read-only mode.

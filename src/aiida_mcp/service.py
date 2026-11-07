@@ -1,6 +1,8 @@
 """Generic AiiDA operations for one explicitly configured runtime."""
 from __future__ import annotations
 
+import asyncio
+import time
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -75,6 +77,19 @@ class AiiDAService:
     async def code_check_executable(self, computer_label: str, executable: str, prepend_text: str | None = None) -> dict[str, Any]:
         return await self._call("code.check_executable", {"computer_label": computer_label, "executable": executable, "prepend_text": prepend_text})
     async def code_create(self, params: dict[str, Any]) -> dict[str, Any]: return await self._call("code.create", params)
+
+    # Structures
+    async def create_structure(self, params: dict[str, Any]) -> dict[str, Any]: return await self._call("structure.create", params)
+
+    # Waiting without burning agent turns
+    async def wait_for_process(self, identifier: str, *, timeout_seconds: float = 300, poll_seconds: float = 5) -> dict[str, Any]:
+        deadline = time.monotonic() + max(0.0, min(float(timeout_seconds), 1800.0))
+        while True:
+            state = await self._call("process.state", {"identifier": str(identifier)})
+            remaining = deadline - time.monotonic()
+            if state.get("terminated") or remaining <= 0:
+                return {**state, "timed_out": not state.get("terminated")}
+            await asyncio.sleep(min(max(1.0, float(poll_seconds)), remaining))
 
     # Plugins (loaded inside the worker from the `aiida_mcp.tools` entry-point group)
     async def plugin_manifest(self) -> dict[str, Any]: return await self._call("plugins.manifest")

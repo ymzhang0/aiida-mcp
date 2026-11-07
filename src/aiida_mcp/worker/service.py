@@ -115,6 +115,8 @@ class AiiDAWorkerService:
             "computer.create": self._computer_create,
             "code.check_executable": self._code_check_executable,
             "code.create": self._code_create,
+            "structure.create": self._structure_create,
+            "process.state": self._process_state,
         }
         from aiida_mcp.worker.application.plugin_service import PluginRegistry
 
@@ -233,13 +235,24 @@ class AiiDAWorkerService:
             }
             payload["plugins"] = plugins_list
             payload["daemon_status"] = _is_daemon_running()
-        except Exception:  # noqa: BLE001
+            from aiida_mcp.worker.application.agent_service import daemon_outdated_packages
+            outdated = daemon_outdated_packages()
+            if outdated:
+                payload["daemon_outdated_packages"] = outdated
+                payload["daemon_warning"] = "Packages changed since the daemon started; it will not see new or updated plugins until `verdi daemon restart`."
+        except Exception as exc:  # noqa: BLE001
+            payload["profile_error"] = f"{type(exc).__name__}: {exc}"
             payload.setdefault("profile", "unknown")
             payload.setdefault("daemon_status", False)
             payload.setdefault("aiida_version", "unknown")
             payload.setdefault("database_backend", "unknown")
             payload.setdefault("resources", {"computers": 0, "codes": 0, "workchains": 0})
             payload.setdefault("plugins", [])
+        try:
+            from aiida.manage.configuration.settings import AiiDAConfigDir
+            payload["config_dir"] = str(AiiDAConfigDir.get())
+        except Exception:  # noqa: BLE001
+            payload["config_dir"] = os.environ.get("AIIDA_PATH")
         return payload
 
     @staticmethod
@@ -707,6 +720,20 @@ class AiiDAWorkerService:
         from aiida_mcp.worker.application.computer_service import create_code
         ensure_profile_loaded()
         return create_code(params)
+
+    @staticmethod
+    def _structure_create(params: dict[str, Any]) -> Mapping[str, Any]:
+        from aiida_mcp.core.engine import ensure_profile_loaded
+        from aiida_mcp.worker.application.agent_service import create_structure
+        ensure_profile_loaded()
+        return create_structure(params, workspace_path=_context_value(params, "workspace_path"))
+
+    @staticmethod
+    def _process_state(params: dict[str, Any]) -> Mapping[str, Any]:
+        from aiida_mcp.core.engine import ensure_profile_loaded
+        from aiida_mcp.worker.application.agent_service import process_state
+        ensure_profile_loaded()
+        return process_state(str(params.get("identifier") or ""))
 
     def _plugins_manifest(self, _: dict[str, Any]) -> Mapping[str, Any]:
         return self._plugins.manifest()
