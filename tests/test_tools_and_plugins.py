@@ -117,3 +117,21 @@ async def test_plugin_tool_cannot_shadow_a_builtin_tool() -> None:
 
 
 _TOOLS = [report, cleanup]
+
+
+def test_compact_process_keeps_values_and_drops_duplicates() -> None:
+    from aiida_mcp.mcp import compact_process
+
+    params = {"pk": 9, "type": "Dict", "payload": {"energy": -310.7, "symmetries": list(range(48)), "SYSTEM": {"ecutrho": 360}},
+              "preview_info": {"summary": "x" * 5000, "data": {"energy": -310.7}}, "link_label": "output_parameters"}
+    detail = {"summary": {"pk": 1, "process_label": "PwBaseWorkChain", "state": "finished", "exit_status": 0, "full_type": "long"},
+              "inputs": {"max_iterations": {"pk": 2, "type": "Int", "payload": 5, "label": "5"}},
+              "outputs": {"output_parameters": params, "iteration_01": {"pk": 3, "process_label": "PwCalculation", "state": "finished", "exit_status": 0}},
+              "direct_outputs": {"output_parameters": params}, "workchain": {"provenance_tree": "y" * 80000},
+              "logs": {"reports": [f"line {i}" for i in range(30)]}}
+    compact = compact_process(detail)
+    assert compact["outputs"]["output_parameters"]["value"] == {"energy": -310.7, "symmetries": "<list of 48>", "SYSTEM": {"ecutrho": 360}}
+    assert compact["inputs"]["max_iterations"] == {"pk": 2, "type": "Int", "value": 5}
+    assert compact["called"]["iteration_01"]["type"] == "PwCalculation"
+    assert len(compact["reports"]) == 20 and "full_type" not in compact["summary"]
+    assert "workchain" not in compact and "direct_outputs" not in compact

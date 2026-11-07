@@ -20,7 +20,7 @@ _INSTRUCTIONS = """AiiDA tools for the single Python environment and profile sel
 Checking work: list_processes (filter by process_state such as waiting/running/finished/excepted/killed)
 -> get_process / get_process_logs / get_descendants for one process.
 Running work: list_workflows -> get_workflow_spec -> list_codes / find_input_candidates
-(create_structure if no stored structure fits) -> validate_submission (validates, stores nothing) -> submit
+(search_structures + import_structure for known materials, else create_structure) -> validate_submission (validates, stores nothing) -> submit
 -> wait_for_process (do not poll get_process in a loop). If it failed: get_process / diagnose_process explain why.
 Setting up a cluster: list_ssh_hosts / list_computers -> create_computer (tests the connection
 first, stores nothing on failure) -> check_code -> create_code. Existing computers and codes are never modified.
@@ -76,8 +76,10 @@ def build_mcp_server(service: AiiDAService, *, allow_write: bool = False, plugin
     @tool(name="list_processes", description="List processes newest first. Filter by process_state (created, waiting, running, finished, excepted, killed), label/process-label substring or PK, age in days, or Group UUID. root_only=False includes sub-processes.", annotations=_READ_ONLY)
     async def process_list(limit: int = 20, process_state: str | None = None, label: str | None = None, root_only: bool = True, days: int | None = None, group_uuid: str | None = None) -> dict[str, Any]:
         return await service.process_list(limit=limit, process_state=process_state, label=label, root_only=root_only, days=days, group_uuid=group_uuid)
-    @tool(name="get_process", description="Read a process by PK or UUID: state, exit status, inputs, outputs, and called sub-processes.", annotations=_READ_ONLY)
-    async def process_get(identifier: str) -> dict[str, Any]: return await service.process_get(identifier)
+    @tool(name="get_process", description="Read a process by PK or UUID: state, exit status/message, inputs, outputs with their values (e.g. a PwCalculation's energy in output_parameters), called sub-processes, and reports. Compact by default; detail='full' returns every field (large).", annotations=_READ_ONLY)
+    async def process_get(identifier: str, detail: str = "compact") -> dict[str, Any]:
+        result = await service.process_get(identifier)
+        return result if detail == "full" else compact_process(result)
     @tool(name="get_workgraph", description="Read the call graph of an aiida-workgraph WorkGraph process.", annotations=_READ_ONLY)
     async def process_workgraph(identifier: str) -> dict[str, Any]: return await service.process_workgraph(identifier)
     @tool(name="wait_for_process", description="Block until a process terminates or timeout_seconds passes (max 1800), then return its state, exit status/message, and output names. Use this instead of calling get_process repeatedly. For HPC jobs that may queue for hours, use a modest timeout and tell the user the PK.", annotations=_READ_ONLY)
@@ -98,6 +100,11 @@ def build_mcp_server(service: AiiDAService, *, allow_write: bool = False, plugin
     async def submission_draft(entry_point: str, inputs: dict[str, Any] | None = None, protocol: str | None = None, protocol_arguments: dict[str, Any] | None = None, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         return await service.submission_draft(_draft(entry_point, inputs, protocol, protocol_arguments, overrides))
 
+    # Structure databases (OPTIMADE)
+    @tool(name="search_structures", description="Search a structure database over OPTIMADE and return one compact row per match (id, formula, nsites, lattice lengths, and per-database extras: MC3D total/per-atom energy and original source, MC2D band gap, MP energy above hull). provider: 'mc3d' (Materials Cloud 3D, relaxed with AiiDA, PBE), 'mc2d' (Materials Cloud 2D layers, non-periodic along z), or 'mp' (Materials Project). Give `formula` (any order, e.g. 'SiO2') and/or `elements` (+ elements_only to exclude extra elements), optional max_sites.", annotations=_REMOTE_READ)
+    async def search_structures(provider: str, formula: str | None = None, elements: list[str] | None = None, elements_only: bool = False, max_sites: int | None = None, limit: int = 10) -> dict[str, Any]:
+        return await service.search_structures(provider, formula=formula, elements=elements, elements_only=elements_only, max_sites=max_sites, limit=limit)
+
     # Computers and codes
     @tool(name="list_ssh_hosts", description="List host aliases from the user's ~/.ssh/config (hostname, user, port, ProxyJump, identity file path; never key contents). Use them to fill create_computer.", annotations=_READ_ONLY)
     async def ssh_hosts() -> dict[str, Any]: return await service.ssh_hosts()
@@ -113,6 +120,8 @@ def build_mcp_server(service: AiiDAService, *, allow_write: bool = False, plugin
         async def create_structure(bulk: dict[str, Any] | None = None, file: str | None = None, cell: list[list[float]] | None = None, sites: list[dict[str, Any]] | None = None, pbc: list[bool] | None = None, supercell: list[int] | None = None, label: str | None = None, description: str | None = None) -> dict[str, Any]:
             params = {"bulk": bulk, "file": file, "cell": cell, "sites": sites, "pbc": pbc, "supercell": supercell, "label": label, "description": description}
             return await service.create_structure({key: value for key, value in params.items() if value is not None})
+        @tool(name="import_structure", description="Store one structure from search_structures as StructureData, recording its database, id, and URL in extras. Importing the same entry again returns the existing node (deduplicated). MC2D layers are stored with pbc (True, True, False). Returns the PK to use as {\"pk\": N}.", annotations=_REMOTE_WRITE)
+        async def import_structure(provider: str, entry_id: str, label: str | None = None) -> dict[str, Any]: return await service.import_structure(provider, entry_id, label=label)
         @tool(name="create_computer", description="Create and configure a new AiiDA computer. Tests the connection first and stores nothing if it fails. Never modifies an existing computer. Give `fields` (computer_label, hostname, transport_type such as core.ssh_async/core.ssh/core.local, scheduler_type such as core.slurm, work_dir, mpirun_command, mpiprocs_per_machine, prepend_text, username, proxy_jump, key_filename, ...) and/or verdi-style `setup_yaml` and `configure_yaml`; `fields` win.", annotations=_REMOTE_WRITE)
         async def computer_create(fields: dict[str, Any] | None = None, setup_yaml: str | None = None, configure_yaml: str | None = None) -> dict[str, Any]:
             return await service.computer_create({"fields": dict(fields or {}), "setup_yaml": setup_yaml, "configure_yaml": configure_yaml})
@@ -120,9 +129,9 @@ def build_mcp_server(service: AiiDAService, *, allow_write: bool = False, plugin
         async def code_create(fields: dict[str, Any] | None = None, yaml: str | None = None) -> dict[str, Any]:
             return await service.code_create({"fields": dict(fields or {}), "yaml": yaml})
 
-        @tool(name="submit", description="Submit a workflow or calculation to the AiiDA daemon. Takes the same arguments as validate_submission; run that first. Returns the new process PK.", annotations=_WRITE)
-        async def submit(entry_point: str, inputs: dict[str, Any] | None = None, protocol: str | None = None, protocol_arguments: dict[str, Any] | None = None, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
-            return await service.submission_submit(_draft(entry_point, inputs, protocol, protocol_arguments, overrides))
+        @tool(name="submit", description="Submit a workflow or calculation to the AiiDA daemon. Takes the same arguments as validate_submission; run that first. Optional `label` and `description` are set on the process node, and `group` (a label; created if missing) receives it, so related runs stay together. Returns the new process PK.", annotations=_WRITE)
+        async def submit(entry_point: str, inputs: dict[str, Any] | None = None, protocol: str | None = None, protocol_arguments: dict[str, Any] | None = None, overrides: dict[str, Any] | None = None, label: str | None = None, description: str | None = None, group: str | None = None) -> dict[str, Any]:
+            return await service.submission_submit(_draft(entry_point, inputs, protocol, protocol_arguments, overrides, label=label, description=description, group=group))
         @tool(name="kill_processes", description="Kill running or waiting processes (PKs or UUIDs). Irreversible.", annotations=_DESTRUCTIVE)
         async def process_kill(identifiers: list[str], force: bool = False) -> dict[str, Any]: return await service.process_control("kill", identifiers, force=force)
         @tool(name="pause_processes", description="Pause running or waiting processes (PKs or UUIDs).", annotations=_WRITE)
@@ -147,8 +156,57 @@ def build_mcp_server(service: AiiDAService, *, allow_write: bool = False, plugin
     return server
 
 
-def _draft(entry_point: str, inputs: dict[str, Any] | None, protocol: str | None, protocol_arguments: dict[str, Any] | None, overrides: dict[str, Any] | None) -> dict[str, Any]:
+def _shrink(value: Any, depth: int = 0) -> Any:
+    """Keep scalars and small structures; replace long lists, long strings and deep nesting by a short note."""
+    if isinstance(value, dict):
+        if depth >= 3:
+            return f"<dict of {len(value)}>"
+        return {str(key): _shrink(item, depth + 1) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_shrink(item, depth + 1) for item in value] if len(value) <= 6 else f"<list of {len(value)}>"
+    if isinstance(value, str) and len(value) > 300:
+        return value[:300] + f"... <{len(value)} chars>"
+    return value
+
+
+def _compact_entry(entry: Any) -> Any:
+    """One linked node as the agent needs it: identity plus its value, never the same data twice."""
+    if not isinstance(entry, dict):
+        return entry
+    out: dict[str, Any] = {"pk": entry.get("pk"), "type": entry.get("process_label") or entry.get("type")}
+    if entry.get("state"):
+        out.update({"state": entry.get("state"), "exit_status": entry.get("exit_status")})
+    preview = entry.get("preview_info") if isinstance(entry.get("preview_info"), dict) else {}
+    payload = entry.get("payload")
+    if out["type"] == "StructureData":
+        out.update({"formula": preview.get("formula") or payload, "nsites": preview.get("atom_count"), "volume_A3": preview.get("cell_volume")})
+    elif payload is not None:
+        out["value"] = _shrink(payload)
+    label = entry.get("label")
+    if label and label not in (out["type"], entry.get("type"), str(out.get("value"))):
+        out["label"] = label
+    return {key: value for key, value in out.items() if value is not None}
+
+
+def compact_process(detail: dict[str, Any]) -> dict[str, Any]:
+    summary = detail.get("summary") or {}
+    keep = ("pk", "uuid", "process_label", "state", "exit_status", "exit_message", "process_status", "paused", "ctime")
+    outputs = detail.get("outputs") or {}
+    called = {name: _compact_entry(entry) for name, entry in outputs.items() if isinstance(entry, dict) and entry.get("state")}
+    logs = detail.get("logs") or {}
+    return {
+        "summary": {key: summary.get(key) for key in keep if summary.get(key) is not None},
+        "inputs": {name: _compact_entry(entry) for name, entry in (detail.get("inputs") or {}).items()},
+        "outputs": {name: _compact_entry(entry) for name, entry in outputs.items() if name not in called},
+        "called": called,
+        "reports": (logs.get("reports") or [])[-20:],
+        "note": "Compact view: long lists are summarised. Pass detail='full' for every field, or get_node for one node.",
+    }
+
+
+def _draft(entry_point: str, inputs: dict[str, Any] | None, protocol: str | None, protocol_arguments: dict[str, Any] | None, overrides: dict[str, Any] | None, **organize: Any) -> dict[str, Any]:
     draft: dict[str, Any] = {"entry_point": entry_point, "protocol": protocol, "intent_data": dict(protocol_arguments or {}), "overrides": dict(overrides or {})}
+    draft.update({key: value for key, value in organize.items() if value})
     if inputs is not None:
         draft["inputs"] = dict(inputs)
     return draft

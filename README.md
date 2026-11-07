@@ -45,6 +45,7 @@ agents that launch MCP servers as subprocesses.
 | --- | --- |
 | Check work | `list_processes` (filter by state, label, age, Group), `get_process`, `get_process_logs`, `get_workgraph` |
 | Run work | `list_workflows`, `get_workflow_spec`, `find_input_candidates`, `list_codes`, `validate_submission`, **`submit`** |
+| Structures | `search_structures` (MC3D, MC2D, Materials Project over OPTIMADE), **`import_structure`**, **`create_structure`** |
 | Clusters and codes | `list_ssh_hosts`, `list_computers`, `check_code`, **`create_computer`**, **`create_code`** |
 | Control work | **`kill_processes`**, **`pause_processes`**, **`resume_processes`** |
 | Explore data | `list_nodes`, `get_node`, `get_node_links`, `compare_nodes`, `list_groups`, `get_group`, `get_ancestors`, `get_descendants`, `list_provenance_roots`, `get_provenance_subgraph`, `inspect_archive`, `get_status` |

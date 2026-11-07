@@ -548,7 +548,16 @@ def _execute(mode: str, params: Mapping[str, Any]) -> dict[str, Any]:
                 "errors": result["errors"],
                 "missing_ports": result["missing_ports"],
             }
-        node = submit(result["builder"])
+        builder = result["builder"]
+        if params.get("label"):
+            builder.metadata.label = str(params["label"])
+        if params.get("description"):
+            builder.metadata.description = str(params["description"])
+        node = submit(builder)
+        group_label = str(params.get("group") or "").strip()
+        if group_label:
+            group, _ = orm.Group.collection.get_or_create(label=group_label)
+            group.add_nodes(node)
         process_state = getattr(node, "process_state", None)
         state = process_state.value if hasattr(process_state, "value") else str(process_state or "created")
         return {
@@ -557,6 +566,8 @@ def _execute(mode: str, params: Mapping[str, Any]) -> dict[str, Any]:
             "pk": int(node.pk),
             "uuid": str(node.uuid),
             "state": state,
+            "label": node.label or None,
+            "group": group_label or None,
         }
 
     raise ValueError(f"Unsupported submission mode: {mode}")
@@ -570,6 +581,9 @@ def _normalize_builder_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         "intent_data": dict(normalized.get("intent_data") or {}),
         "overrides": dict(normalized.get("overrides") or {}),
         "inputs": dict(normalized.get("inputs") or {}) if isinstance(normalized.get("inputs"), Mapping) else None,
+        "label": normalized.get("label"),
+        "description": normalized.get("description"),
+        "group": normalized.get("group"),
     }
 
 

@@ -37,8 +37,11 @@ Always follow this order:
    - Codes: `list_codes`, then pass the `full_label` (`pw@cluster`).
    - Existing structures and other nodes: `find_input_candidates` with
      the `port_path` (e.g. `pw.structure`), then pass `{"pk": N}`.
-   - No suitable structure stored: `create_structure`, then pass its
-     `{"pk": N}`. Use `bulk` for standard crystals, e.g.
+   - A known material: `search_structures` on `mc3d` (AiiDA-relaxed PBE
+     bulk, sorted by energy per atom), `mc2d` (2D layers), or `mp`, then
+     `import_structure` with the chosen id. The source is recorded on the
+     node, and importing the same entry twice reuses it.
+   - Otherwise `create_structure`, then pass its `{"pk": N}`. Use `bulk` for standard crystals, e.g.
      `{"name": "Si", "crystalstructure": "diamond", "a": 5.43}`, or `file` for
      a CIF/POSCAR in the project. Check the returned formula and volume.
    - Base values are plain JSON: `2` becomes Int, `"x"` becomes Str, and
@@ -54,7 +57,11 @@ Always follow this order:
    continuing.
 5. **Show the user the entry point, the code/computer, the key inputs, and the
    resources, and get their confirmation.** Submitting uses real compute time.
-6. `submit` with the same arguments, then report the returned PK.
+6. `submit` with the same arguments plus a `label` and a `group` that
+   keeps related runs together (e.g. `si/scf-convergence`), then report the
+   returned PK. Read results from `get_process` (compact by default: the
+   energy is in `outputs.output_parameters.value`); use `detail="full"`
+   only when something is missing.
 7. Follow progress with `wait_for_process`, not repeated `get_process`
    calls. HPC jobs can queue for hours. If it times out, give the user the PK
    and the current state.

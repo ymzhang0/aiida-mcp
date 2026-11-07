@@ -80,6 +80,14 @@ class AiiDAService:
 
     # Structures
     async def create_structure(self, params: dict[str, Any]) -> dict[str, Any]: return await self._call("structure.create", params)
+    async def search_structures(self, provider: str, **filters: Any) -> dict[str, Any]:
+        from .optimade import search_structures
+        return await search_structures(provider, **filters)
+    async def import_structure(self, provider: str, entry_id: str, *, label: str | None = None) -> dict[str, Any]:
+        from .optimade import fetch_entry, to_artifact
+        artifact = to_artifact(provider, await fetch_entry(provider, entry_id))
+        receipt = await self._call("structure.import", {"artifact": artifact, "label": label, "description": f"Imported from {provider} via OPTIMADE: {entry_id}"})
+        return {**receipt, "provider": provider, "entry_id": entry_id, "periodic": artifact["periodic_boundary_conditions"], "source_url": artifact["source"]["url"]}
 
     # Waiting without burning agent turns
     async def wait_for_process(self, identifier: str, *, timeout_seconds: float = 300, poll_seconds: float = 5) -> dict[str, Any]:
