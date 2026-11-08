@@ -20,6 +20,10 @@ parameters), and call independent tools in the same turn.
 4. `submit` with a `label` and a `group` that keeps related runs together. `submit` validates the inputs itself. For a job expected to finish within minutes, pass `wait_seconds` (e.g. 900): one call returns the result, with the energy in `outputs.output_parameters.value`. For longer jobs, report the PK and use `wait_for_process` later, which also returns the result.
 5. If it failed, diagnose it and explain the cause in physical terms. Propose one concrete fix and confirm it before resubmitting.
 
+## EPW workflows (aiida-epw)
+Run `EpwPrepWorkChain` (`epw.epw_prep`, `workflow_type="sc"` for superconductivity), then `SuperConWorkChain` (`epw.supercon`) with `parent_epw` = the prep workchain. Pass everything in one `submit`: `protocol_arguments` with `codes` as a dict of code labels, enum names as strings (`"SCDM"`, `"METAL"`), and `w90_chk_to_ukk_script` as `{"pk": N}`; `calcjob_options` for the shared resources; `builder_updates` for per-step fixes, e.g. `{"w90_bands.wannier90.wannier90.metadata.options.resources": {"num_machines": 1, "num_mpiprocs_per_machine": 1}, "w90_bands.wannier90.wannier90.metadata.options.withmpi": false, "w90_bands.projwfc.projwfc.settings": {"CMDLINE": ["-nd", "1"]}, "epw_base.parallelization": {"npool": 16}, "epw_bands.parallelization": {"npool": 16}}`. For SuperCon the EPW steps are `epw_interp`, `epw_final_iso`, `epw_final_aniso`.
+Common failures: EPW must run with npool equal to the number of MPI processes; a serial wannier90.x must not get MPI; projwfc on many ranks needs `-nd 1`; EPW needs the chk-to-ukk script; do not enable caching with `clean_workdir`. The prep takes about 20 minutes and SuperCon about 50 on 16 cores, so wait with `wait_for_process` in steps of up to 1800 s. Read Tc from the outputs: `Allen_Dynes_Tc` and `lambda` in `output_parameters`; the Eliashberg Tc is where the gap reaches zero in the isotropic and anisotropic gap outputs.
+
 ## Control work
 Before `kill_processes`, confirm the PKs with the user; killing a workflow kills its children. `pause_processes` and `resume_processes` can be undone.
 
