@@ -175,3 +175,42 @@ def test_worker_keeps_stdout_for_json_rpc_when_handlers_print() -> None:
     lines = done.stdout.splitlines()
     assert len(lines) == 1 and json.loads(lines[0])["result"] == {"ok": True}
     assert "chatty plugin output" in done.stderr
+
+
+def test_plugin_manifest_is_cached_and_refreshed_in_background(monkeypatch, tmp_path) -> None:
+    import threading
+
+    from aiida_mcp import plugins
+    from aiida_mcp.service import RuntimeConfig
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    runtime = RuntimeConfig("/env/bin/python", "demo")
+    answers = [[{"name": "first"}], [{"name": "second"}]]
+    refreshed = threading.Event()
+
+    def query(_runtime, *, timeout):
+        tools = answers.pop(0)
+        if not answers:
+            refreshed.set()
+        return tools
+
+    monkeypatch.setattr(plugins, "_query_manifest", query)
+    assert plugins.discover_plugin_tools(runtime) == [{"name": "first"}]  # no cache: asks the worker
+    assert plugins.discover_plugin_tools(runtime) == [{"name": "first"}]  # cached answer, refresh in background
+    assert refreshed.wait(5)
+    for _ in range(50):
+        if plugins._read_cache(plugins._cache_path(runtime)) == [{"name": "second"}]:
+            break
+        threading.Event().wait(0.05)
+    assert plugins._read_cache(plugins._cache_path(runtime)) == [{"name": "second"}]
+
+
+def test_failed_discovery_is_not_cached(monkeypatch, tmp_path) -> None:
+    from aiida_mcp import plugins
+    from aiida_mcp.service import RuntimeConfig
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    runtime = RuntimeConfig("/env/bin/python", "demo")
+    monkeypatch.setattr(plugins, "_query_manifest", lambda _runtime, *, timeout: None)
+    assert plugins.discover_plugin_tools(runtime) == []
+    assert not plugins._cache_path(runtime).exists()
