@@ -7,7 +7,7 @@ import pytest
 from aiida_mcp.mcp import build_mcp_server
 from aiida_mcp.worker.application import plugin_service
 
-_WRITE_TOOLS = {"submit", "kill_processes", "pause_processes", "resume_processes"}
+_WRITE_TOOLS = {"submit", "restart_process", "kill_processes", "pause_processes", "resume_processes"}
 _MANIFEST = [
     {"name": "demo_report", "plugin": "demo", "description": "Report.", "read_only": True,
      "input_schema": {"type": "object", "properties": {"identifier": {"type": "string"}}, "required": ["identifier"]}},
@@ -23,6 +23,10 @@ class _Service:
     async def plugin_call(self, tool, arguments):
         self.calls.append((tool, arguments))
         return {"tool": tool, "arguments": arguments}
+
+    async def process_restart(self, params):
+        self.calls.append(("restart", params))
+        return {"success": True, "status": "dry_run" if params.get("dry_run") else "submitted"}
 
     async def submission_submit(self, draft):
         self.calls.append(("submit", draft))
@@ -62,6 +66,15 @@ async def test_submit_maps_protocol_arguments_to_builder_intent() -> None:
     server = build_mcp_server(service, allow_write=True)
     await server.call_tool("submit", {"entry_point": "x.y", "protocol": "fast", "protocol_arguments": {"code": "pw@cluster"}})
     assert service.calls == [("submit", {"entry_point": "x.y", "protocol": "fast", "intent_data": {"code": "pw@cluster"}, "overrides": {}})]
+
+
+@pytest.mark.anyio
+async def test_restart_process_forwards_only_given_arguments() -> None:
+    service = _Service()
+    server = build_mcp_server(service, allow_write=True)
+    result = await server.call_tool("restart_process", {"identifier": "1462", "builder_updates": {"clean_workdir": False}, "dry_run": True})
+    assert service.calls == [("restart", {"identifier": "1462", "builder_updates": {"clean_workdir": False}, "dry_run": True})]
+    assert result.structured_content["status"] == "dry_run"
 
 
 def report(identifier: str, include_outputs: bool = False) -> dict:

@@ -21,7 +21,8 @@ Checking work: list_processes (filter by process_state such as waiting/running/f
 -> get_process / get_process_logs / get_descendants for one process.
 Running work: list_workflows -> get_workflow_spec -> list_codes / find_input_candidates
 (search_structures + import_structure for known materials, else create_structure) -> validate_submission (validates, stores nothing) -> submit
--> wait_for_process (do not poll get_process in a loop). If it failed: get_process / diagnose_process explain why.
+-> wait_for_process (do not poll get_process in a loop). If it failed: get_process / diagnose_process explain why;
+after the fix is agreed, restart_process (dry_run first) resubmits it, reusing finished steps. A paused process only needs resume_processes.
 Setting up a cluster: list_ssh_hosts / list_computers -> create_computer (tests the connection
 first, stores nothing on failure) -> check_code -> create_code. Existing computers and codes are never modified.
 Input values: plain JSON for base types (2 -> Int, {"a": 1} -> Dict); reference stored nodes as {"pk": N} or
@@ -142,6 +143,13 @@ def build_mcp_server(service: AiiDAService, *, allow_write: bool = False, plugin
             if wait_seconds > 0 and submitted.get("pk"):
                 return {"submitted": submitted, **(await _wait_with_result(str(submitted["pk"]), wait_seconds))}
             return submitted
+        @tool(name="restart_process", description="Resubmit a terminated (failed, excepted or killed) workflow or calculation from its own inputs, with optional fixes in the same `calcjob_options` and `builder_updates` format as submit. A paused process is not terminated: use resume_processes instead, which recomputes nothing. Finished steps are reused through AiiDA caching when it is enabled in the profile; a finished step whose working directory was cleaned and is still needed is marked invalid as a cache source so it reruns. Returns which steps will be reused or rerun and adds the new process to the old one's groups (or `group`). dry_run=true reports the plan and changes nothing; use it first and show the user the plan.", annotations=_WRITE)
+        async def process_restart(identifier: str, calcjob_options: dict[str, Any] | None = None, builder_updates: dict[str, Any] | None = None, label: str | None = None, description: str | None = None, group: str | None = None, dry_run: bool = False, wait_seconds: int = 0) -> dict[str, Any]:
+            params = {"identifier": identifier, "calcjob_options": calcjob_options, "builder_updates": builder_updates, "label": label, "description": description, "group": group, "dry_run": dry_run}
+            restarted = await service.process_restart({key: value for key, value in params.items() if value not in (None, {}, "")})
+            if wait_seconds > 0 and restarted.get("pk"):
+                return {"restarted": restarted, **(await _wait_with_result(str(restarted["pk"]), wait_seconds))}
+            return restarted
         @tool(name="kill_processes", description="Kill running or waiting processes (PKs or UUIDs). Irreversible.", annotations=_DESTRUCTIVE)
         async def process_kill(identifiers: list[str], force: bool = False) -> dict[str, Any]: return await service.process_control("kill", identifiers, force=force)
         @tool(name="pause_processes", description="Pause running or waiting processes (PKs or UUIDs).", annotations=_WRITE)

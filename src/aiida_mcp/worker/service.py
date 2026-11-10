@@ -109,6 +109,7 @@ class AiiDAWorkerService:
             "registry.execute": self._registry_execute,
             "code.list": self._code_list,
             "process.control": self._process_control,
+            "process.restart": self._process_restart,
             "plugins.manifest": self._plugins_manifest,
             "plugins.call": self._plugins_call,
             "computer.list": self._computer_list,
@@ -741,6 +742,13 @@ class AiiDAWorkerService:
         from aiida_mcp.worker.application.agent_service import create_structure
         ensure_profile_loaded()
         return create_structure(params, workspace_path=_context_value(params, "workspace_path"))
+
+    @staticmethod
+    def _process_restart(params: dict[str, Any]) -> Mapping[str, Any]:
+        from aiida_mcp.core.engine import ensure_profile_loaded
+        from aiida_mcp.core.restart import restart_process
+        ensure_profile_loaded()
+        return restart_process(params)
 
     @staticmethod
     def _process_state(params: dict[str, Any]) -> Mapping[str, Any]:

@@ -58,6 +58,7 @@ class AiiDAService:
         return await self._call("node.recent", params)
     async def process_control(self, action: str, identifiers: list[str], *, force: bool = False) -> dict[str, Any]:
         return await self._call("process.control", {"action": action, "identifiers": [str(item) for item in identifiers], "force": bool(force)})
+    async def process_restart(self, params: dict[str, Any]) -> dict[str, Any]: return await self._call("process.restart", dict(params))
 
     # Workflows and submission
     async def workflow_catalog(self) -> dict[str, Any]: return await self._call("workflow.catalog")
