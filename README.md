@@ -71,6 +71,19 @@ referenced as `{"pk": N}` or `{"uuid": "..."}`. Workflows with
 and `overrides`. `validate_submission` takes the same arguments and only
 validates.
 
+Input values are never guessed between "a number" and "the PK of a node":
+
+| JSON value | Meaning |
+| --- | --- |
+| `{"pk": 42}` or `{"uuid": "..."}` | the stored node |
+| `{"value": 42}` | a new node holding 42 |
+| `42` on an `Int`/`Float`/`Bool`/`Str` port | the value 42 |
+| `42` or a UUID string on a port that cannot hold it (`StructureData`, ...) | that stored node |
+| `42` on a port where both readings fit (`Data`) | rejected; use an explicit form |
+
+Tool errors carry the worker's reason and structured detail, not only the
+JSON-RPC message ("Invalid params").
+
 ## Architecture
 
 The server never imports AiiDA. A private worker subprocess

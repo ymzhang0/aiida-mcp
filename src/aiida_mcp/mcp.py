@@ -6,6 +6,7 @@ from fastmcp import FastMCP
 from fastmcp.tools import Tool
 from fastmcp.tools.base import ToolResult
 from mcp.types import ToolAnnotations
+from .errors import WorkerErrorMiddleware
 from .service import AiiDAService
 
 log = logging.getLogger(__name__)
@@ -26,7 +27,9 @@ after the fix is agreed, restart_process (dry_run first) resubmits it, reusing f
 Setting up a cluster: list_ssh_hosts / list_computers -> create_computer (tests the connection
 first, stores nothing on failure) -> check_code -> create_code. Existing computers and codes are never modified.
 Input values: plain JSON for base types (2 -> Int, {"a": 1} -> Dict); reference stored nodes as {"pk": N} or
-{"uuid": "..."}; codes as "label@computer". Other tools come from installed plugins."""
+{"uuid": "..."}; codes as "label@computer". A bare number is never guessed between a value and a PK: where a port
+could take either (e.g. Data) the call is rejected, so pass {"value": v} for a new literal or {"pk": N} for a node.
+Other tools come from installed plugins."""
 
 
 class PluginTool(Tool):
@@ -41,6 +44,7 @@ class PluginTool(Tool):
 
 def build_mcp_server(service: AiiDAService, *, allow_write: bool = False, plugin_tools: list[dict[str, Any]] | None = None) -> FastMCP:
     server = FastMCP("aiida", instructions=_INSTRUCTIONS if allow_write else _INSTRUCTIONS + "\nThis server is read-only: submission and process control are disabled.")
+    server.add_middleware(WorkerErrorMiddleware())
     names: set[str] = set()
 
     def tool(**kwargs: Any):
