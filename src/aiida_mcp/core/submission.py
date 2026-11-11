@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import enum
 import inspect
+import uuid
 from typing import Any, Mapping
 
 from aiida import orm
@@ -86,9 +87,22 @@ def _load_node_like(value: Any) -> Any:
         if value.get("uuid") not in (None, ""):
             return orm.load_node(value["uuid"])
         return value
-    if isinstance(value, int) and value > 0:
+    # bool is a subclass of int: True must never be read as PK 1.
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return orm.load_node(value)
+    if _is_uuid_string(value):
+        return orm.load_node(value.strip())
     return value
+
+
+def _is_uuid_string(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        uuid.UUID(value.strip())
+    except ValueError:
+        return False
+    return True
 
 
 def _load_group_like(value: Any) -> Any:
@@ -167,11 +181,7 @@ def _coerce_argument(name: str, value: Any, port: Any = None) -> Any:
         return _load_group_like(value)
 
     if node_type is not None and any(_safe_issubclass(item, node_type) for item in valid_types):
-        if not _is_node_reference(value):
-            wrapped = _wrap_base_value(value, valid_types)
-            if wrapped is not _MISSING:
-                return wrapped
-        return _load_node_like(value)
+        return _coerce_node_port_value(name, value, valid_types)
 
     return value
 
@@ -180,26 +190,88 @@ def _is_node_reference(value: Any) -> bool:
     return isinstance(value, Mapping) and set(value) <= {"pk", "uuid"} and any(value.get(key) not in (None, "") for key in ("pk", "uuid"))
 
 
-def _wrap_base_value(value: Any, valid_types: list[type]) -> Any:
-    """Wrap a raw JSON value into the base Data type a port accepts, e.g. ``2`` -> ``Int(2)``.
+def _is_explicit_literal(value: Any) -> bool:
+    return isinstance(value, Mapping) and set(value) == {"value"}
 
-    Without this, a bare integer for an ``Int`` port is misread as a node PK.
+
+def _literal_node_classes(value: Any) -> tuple[type, ...]:
+    """Data classes that can hold ``value`` as a literal, most specific first."""
+    if isinstance(value, bool):
+        return (orm.Bool,)
+    if isinstance(value, int):
+        return (orm.Int, orm.Float)
+    if isinstance(value, float):
+        return (orm.Float,)
+    if isinstance(value, str):
+        return (orm.Str,)
+    if isinstance(value, Mapping):
+        return (orm.Dict,)
+    if isinstance(value, (list, tuple)):
+        return (orm.List,)
+    return ()
+
+
+def _literal_node_class(value: Any, valid_types: list[type]) -> type | None:
+    for candidate in _literal_node_classes(value):
+        if any(_safe_issubclass(candidate, valid_type) for valid_type in valid_types):
+            return candidate
+    return None
+
+
+def _make_literal(node_class: type, value: Any) -> Any:
+    if node_class is orm.Dict:
+        return orm.Dict(dict(value))
+    if node_class is orm.List:
+        return orm.List(list(value))
+    return node_class(value)
+
+
+def _coerce_node_port_value(name: str, value: Any, valid_types: list[type]) -> Any:
+    """Resolve a JSON value bound to a port that takes AiiDA nodes.
+
+    A bare JSON scalar cannot say whether it is a value or the PK of a stored
+    node, and guessing wrong binds a different node without any error. The rule:
+
+    * ``{"pk": n}`` / ``{"uuid": "..."}`` always loads that node (handled by the caller).
+    * ``{"value": v}`` always creates a new node holding ``v``.
+    * A bare value on a port that only takes base types (Int, Float, Bool, Str)
+      is that value, e.g. ``2`` -> ``Int(2)``. A bare positive integer or UUID
+      string on a port that cannot hold it as a literal (StructureData, ...) is
+      a node reference.
+    * A bare scalar on a port where both readings are possible is rejected.
+
+    Plain mappings and lists become ``Dict`` and ``List`` nodes where the port takes them.
     """
     if isinstance(value, orm.Node):
-        return _MISSING
-    is_number = isinstance(value, (int, float)) and not isinstance(value, bool)
-    compatible = (
-        (orm.Bool, isinstance(value, bool)),
-        (orm.Int, isinstance(value, int) and not isinstance(value, bool)),
-        (orm.Float, is_number),
-        (orm.Str, isinstance(value, str)),
-        (orm.Dict, isinstance(value, Mapping)),
-        (orm.List, isinstance(value, (list, tuple))),
+        return value
+    valid_types = [item for item in valid_types if _safe_issubclass(item, orm.Node)]
+
+    explicit = _is_explicit_literal(value)
+    if explicit and all(_safe_issubclass(item, orm.Dict) for item in valid_types):
+        explicit = False  # a Dict port given a dictionary whose only key happens to be "value"
+    literal = value["value"] if explicit else value
+    literal_class = _literal_node_class(literal, valid_types)
+
+    if explicit:
+        if literal_class is None:
+            accepted = ", ".join(sorted(item.__name__ for item in valid_types))
+            raise ValueError(f"Input '{name}' cannot hold {literal!r} as a literal value; the port accepts: {accepted}")
+        return _make_literal(literal_class, literal)
+
+    if isinstance(literal, (Mapping, list, tuple)):
+        return _make_literal(literal_class, literal) if literal_class is not None else value
+
+    is_reference_candidate = (isinstance(literal, int) and not isinstance(literal, bool) and literal > 0) or _is_uuid_string(literal)
+    if literal_class is None:
+        return _load_node_like(literal)
+
+    only_base_types = all(_safe_issubclass(valid_type, orm.BaseType) for valid_type in valid_types)
+    if only_base_types or not is_reference_candidate:
+        return _make_literal(literal_class, literal)
+    raise ValueError(
+        f"Input '{name}' is ambiguous: {literal!r} could be a literal value or a node reference. "
+        f'Pass {{"value": {literal!r}}} for the value or {{"pk": ...}} / {{"uuid": ...}} for a stored node.'
     )
-    for data_type, matches in compatible:
-        if matches and any(item is data_type for item in valid_types):
-            return data_type(dict(value)) if data_type is orm.Dict else data_type(list(value)) if data_type is orm.List else data_type(value)
-    return _MISSING
 
 
 def _serialize_node_value(node: orm.Node) -> Any:
@@ -257,14 +329,28 @@ def _serialize_builder_inputs(value: Any) -> Any:
     return _normalize(value)
 
 
-def _coerce_explicit_inputs(namespace: Any, provided: Mapping[str, Any]) -> dict[str, Any]:
+class InputBindingError(ValueError):
+    """An explicit input could not be bound; ``port`` is its dotted path."""
+
+    def __init__(self, port: str, message: str) -> None:
+        super().__init__(message)
+        self.port = port
+
+
+def _coerce_explicit_inputs(namespace: Any, provided: Mapping[str, Any], prefix: str = "") -> dict[str, Any]:
     coerced: dict[str, Any] = {}
     for name, value in provided.items():
+        path = f"{prefix}.{name}" if prefix else str(name)
         port = namespace.get(name) if hasattr(namespace, "get") else None
         if isinstance(port, PortNamespace) and isinstance(value, Mapping):
-            coerced[name] = _coerce_explicit_inputs(port, value)
-        else:
+            coerced[name] = _coerce_explicit_inputs(port, value, path)
+            continue
+        try:
             coerced[name] = _coerce_argument(str(name), value, port)
+        except InputBindingError:
+            raise
+        except Exception as exc:
+            raise InputBindingError(path, str(exc)) from exc
     return coerced
 
 
@@ -418,6 +504,8 @@ def _build_builder_result(params: Mapping[str, Any]) -> dict[str, Any]:
             builder = workchain.get_builder()
             builder._update(_coerce_explicit_inputs(spec_inputs, input_bindings))
             builder_inputs = builder._inputs(prune=True)
+        except InputBindingError as exc:
+            errors.append({"stage": "bind_explicit_inputs", "port": exc.port, "message": str(exc)})
         except Exception as exc:
             errors.append(
                 {
@@ -500,7 +588,9 @@ def _build_builder_result(params: Mapping[str, Any]) -> dict[str, Any]:
         except Exception as exc:
             errors.append({"stage": "builder_updates", "message": str(exc)})
 
-    missing_ports = _list_missing_required_ports(spec_inputs, builder_inputs)
+    # A failed binding leaves the builder empty; listing every required port as missing would bury the cause.
+    bind_failed = any(error.get("stage") == "bind_explicit_inputs" for error in errors)
+    missing_ports = [] if bind_failed else _list_missing_required_ports(spec_inputs, builder_inputs)
     for missing in missing_ports:
         errors.append(
             {
