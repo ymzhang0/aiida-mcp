@@ -35,8 +35,12 @@ cannot change either. The server listens on `127.0.0.1:8043` by default
 (`AIIDA_MCP_HOST`, `AIIDA_MCP_PORT`). Use `AIIDA_MCP_TRANSPORT=stdio` for
 agents that launch MCP servers as subprocesses.
 
-- `/mcp` is the MCP endpoint (streamable HTTP). Set `AIIDA_MCP_TOKEN` to
-  require `Authorization: Bearer <token>`.
+- `/mcp` is the MCP endpoint (streamable HTTP).
+- Set `AIIDA_MCP_TOKEN` to require `Authorization: Bearer <token>` on both
+  `/mcp` and `/api`. Without a token the server only answers requests whose
+  `Host` is `127.0.0.1`/`localhost`, so a tunnel (ngrok, cloudflared) or a
+  non-loopback `AIIDA_MCP_HOST` needs the token; the server refuses to start
+  on a non-loopback address without one.
 - `/api` is the matching read-only HTTP transport used by `aiida-project`.
 
 ## Tools

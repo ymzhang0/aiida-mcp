@@ -90,6 +90,7 @@ def cleanup() -> list:
 
 
 def test_worker_discovers_entry_point_tools(monkeypatch) -> None:
+    pytest.importorskip("aiida")  # calling a plugin tool loads the AiiDA profile helpers
     entry_point = EntryPoint(name="demo", value=f"{__name__}:_TOOLS", group=plugin_service.ENTRY_POINT_GROUP)
     broken = EntryPoint(name="broken", value="does_not_exist:tools", group=plugin_service.ENTRY_POINT_GROUP)
     monkeypatch.setattr(plugin_service, "entry_points", lambda group: [entry_point, broken])

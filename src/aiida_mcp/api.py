@@ -1,15 +1,21 @@
 """Generic local HTTP transport for the configured AiiDA runtime."""
 from __future__ import annotations
+import logging
 from typing import Any
 from fastapi import APIRouter, HTTPException
 from .runtime import WorkerRuntimeError
 from .service import AiiDAService
 
 
+log = logging.getLogger(__name__)
+
+
 def _error(exc: Exception) -> HTTPException:
     if isinstance(exc, WorkerRuntimeError): return HTTPException(exc.status_code, {"message": str(exc), **exc.detail})
     if isinstance(exc, ValueError): return HTTPException(422, str(exc))
-    return HTTPException(500, str(exc))
+    # Unexpected failures are logged here; their text may hold paths or internals the client should not see.
+    log.error("Unhandled error in the AiiDA API", exc_info=exc)
+    return HTTPException(500, "Internal server error")
 
 
 def build_router(service: AiiDAService) -> APIRouter:

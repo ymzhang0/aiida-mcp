@@ -2,6 +2,7 @@
 from __future__ import annotations
 import argparse
 import os
+import secrets
 from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI, Request
@@ -20,6 +21,32 @@ def runtime_config(*, python_interpreter: str | None = None, profile: str | None
 def allow_write_default() -> bool:
     return os.environ.get("AIIDA_MCP_READ_ONLY", "").strip().lower() not in {"1", "true", "yes"}
 
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+def _hostname(host_header: str) -> str:
+    """Host header without its port: 'localhost:8043' -> 'localhost', '[::1]:8043' -> '::1'."""
+    value = host_header.strip().lower()
+    if value.startswith("["): return value[1:].split("]", 1)[0]
+    return value.rsplit(":", 1)[0] if value.count(":") == 1 else value
+
+def access_error(*, token: str, path: str, host_header: str, authorization: str) -> tuple[int, str] | None:
+    """Why a request to /mcp or /api is refused, or None.
+
+    With a token, every request needs it. Without one the server only answers requests
+    addressed to a loopback name: that stops DNS rebinding from a web page and keeps a
+    tunnel that forwards the whole port from exposing the runtime unauthenticated.
+    """
+    if path == "/api/ready" or not (path.startswith("/mcp") or path.startswith("/api")): return None
+    if token:
+        if secrets.compare_digest(authorization.encode(), f"Bearer {token}".encode()): return None
+        return 401, "Invalid MCP token"
+    if _hostname(host_header) in _LOOPBACK_HOSTS: return None
+    return 403, "Set AIIDA_MCP_TOKEN to reach this server through anything but localhost"
+
+def require_token_for_host(host: str) -> None:
+    if host.strip().lower() not in _LOOPBACK_HOSTS and not str(os.environ.get("AIIDA_MCP_TOKEN") or "").strip():
+        raise SystemExit(f"Refusing to listen on {host} without AIIDA_MCP_TOKEN: anyone who can reach the port could use this AiiDA runtime.")
+
 def create_app(*, runtime: RuntimeConfig | None = None, workers: WorkerRuntimePool | None = None, allow_write: bool | None = None, plugin_tools: list[dict] | None = None) -> FastAPI:
     configured_runtime = runtime or runtime_config()
     pool = workers or WorkerRuntimePool()
@@ -37,7 +64,8 @@ def create_app(*, runtime: RuntimeConfig | None = None, workers: WorkerRuntimePo
     token = str(os.environ.get("AIIDA_MCP_TOKEN") or "").strip()
     @app.middleware("http")
     async def require_plugin_token(request: Request, call_next):
-        if token and request.url.path.startswith("/mcp") and request.headers.get("authorization") != f"Bearer {token}": return JSONResponse(status_code=401, content={"detail": "Invalid MCP token"})
+        refused = access_error(token=token, path=request.url.path, host_header=request.headers.get("host", ""), authorization=request.headers.get("authorization", ""))
+        if refused: return JSONResponse(status_code=refused[0], content={"detail": refused[1]})
         return await call_next(request)
     app.mount("/mcp", mcp_app)
     return app
@@ -57,4 +85,6 @@ def main(argv: list[str] | None = None) -> None:
     if os.environ.get("AIIDA_MCP_TRANSPORT", "").lower() == "stdio":
         build_mcp_server(AiiDAService(runtime, WorkerRuntimePool()), allow_write=allow_write, plugin_tools=plugin_tools).run(transport="stdio")
         return
-    uvicorn.run(create_app(runtime=runtime, allow_write=allow_write, plugin_tools=plugin_tools), host=os.environ.get("AIIDA_MCP_HOST", "127.0.0.1"), port=int(os.environ.get("AIIDA_MCP_PORT", "8043")))
+    host = os.environ.get("AIIDA_MCP_HOST", "127.0.0.1")
+    require_token_for_host(host)
+    uvicorn.run(create_app(runtime=runtime, allow_write=allow_write, plugin_tools=plugin_tools), host=host, port=int(os.environ.get("AIIDA_MCP_PORT", "8043")))

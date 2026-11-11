@@ -5,8 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MCP_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PORT="${AIIDA_MCP_PORT:-8043}"
 URL="http://127.0.0.1:${PORT}"
-PID_FILE="${TMPDIR:-/tmp}/aiida-mcp.pid"
-LOG_FILE="${TMPDIR:-/tmp}/aiida-mcp.log"
+# Per-user state directory: a fixed path in /tmp can be pre-created or read by other users.
+STATE_DIR="${AIIDA_MCP_STATE_DIR:-${XDG_STATE_HOME:-${HOME}/.local/state}/aiida-mcp}"
+mkdir -p "${STATE_DIR}"; chmod 700 "${STATE_DIR}"
+PID_FILE="${STATE_DIR}/aiida-mcp-${PORT}.pid"
+LOG_FILE="${STATE_DIR}/aiida-mcp-${PORT}.log"
 PYTHON_BIN="${AIIDA_MCP_SERVER_PYTHON:-${MCP_DIR}/.venv/bin/python}"
 
 is_ready() { curl --silent --fail --max-time 2 "${URL}/api/ready" >/dev/null 2>&1; }
@@ -32,7 +35,12 @@ start() {
 stop() {
   if [[ -f "${PID_FILE}" ]]; then
     pid="$(<"${PID_FILE}")"
-    if kill -0 "${pid}" 2>/dev/null; then kill "${pid}"; fi
+    # The PID may have been reused since the file was written: only kill our own server.
+    if [[ "${pid}" =~ ^[0-9]+$ ]] && ps -p "${pid}" -o args= 2>/dev/null | grep -q "aiida_mcp serve"; then
+      kill "${pid}"
+    elif [[ -n "${pid}" ]]; then
+      echo "PID ${pid} is not a running aiida-mcp server; removing the stale PID file." >&2
+    fi
     rm -f "${PID_FILE}"
   fi
 }

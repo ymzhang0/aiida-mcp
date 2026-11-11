@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from collections import deque
 from dataclasses import dataclass
@@ -13,6 +14,8 @@ from typing import Any, Mapping
 
 
 RPC_LINE_LIMIT = 16 * 1024 * 1024
+
+log = logging.getLogger(__name__)
 
 
 class WorkerRuntimeError(RuntimeError):
@@ -58,7 +61,7 @@ class WorkerRuntimePool:
     def __init__(self, *, request_timeout: float = 60.0) -> None:
         self.request_timeout = max(0.2, float(request_timeout))
         self._workers: dict[tuple[str, str, str], _WorkerProcess] = {}
-        self._lock = asyncio.Lock()
+        self._locks: dict[tuple[str, str, str], asyncio.Lock] = {}
 
     async def request(
         self,
@@ -75,24 +78,39 @@ class WorkerRuntimePool:
         await asyncio.gather(*(worker.stop() for worker in workers), return_exceptions=True)
 
     async def _worker_for(self, runtime: Runtime) -> "_WorkerProcess":
-        async with self._lock:
+        # One lock per runtime: a slow worker start must not block requests to other runtimes.
+        async with self._locks.setdefault(runtime.key, asyncio.Lock()):
             worker = self._workers.get(runtime.key)
             if worker is not None:
-                return worker
+                if worker.alive:
+                    return worker
+                # A worker that crashed, timed out, or was invalidated is replaced, not kept offline forever.
+                self._workers.pop(runtime.key, None)
+                await worker.stop()
             interpreter = Path(runtime.python_interpreter_path).expanduser()
             bootstrap = Path(__file__).with_name("worker_bootstrap.py")
             if not interpreter.is_file() or not os.access(interpreter, os.X_OK):
                 raise WorkerRuntimeError("Project Python interpreter is unavailable", status_code=404)
             if not bootstrap.is_file():
                 raise WorkerRuntimeError("Bundled worker bootstrap is unavailable")
+            if runtime.workspace_path and not Path(runtime.workspace_path).expanduser().is_dir():
+                raise WorkerRuntimeError("Configured workspace directory is unavailable", status_code=404)
             worker = _WorkerProcess(
                 command=[str(interpreter), "-u", str(bootstrap)],
                 cwd=runtime.workspace_path,
                 env=worker_environment(runtime.aiida_profile),
                 request_timeout=self.request_timeout,
             )
-            await worker.start()
-            status = await worker.request("runtime.status", {}, context=runtime.context())
+            try:
+                await worker.start()
+            except OSError as exc:
+                log.warning("Could not start the AiiDA worker: %s", exc)
+                raise WorkerRuntimeError("AiiDA worker could not be started") from exc
+            try:
+                status = await worker.request("runtime.status", {}, context=runtime.context())
+            except BaseException:
+                await worker.stop()
+                raise
             if str(status.get("profile") or "") != runtime.aiida_profile:
                 await worker.stop()
                 raise WorkerRuntimeError(
@@ -103,6 +121,15 @@ class WorkerRuntimePool:
                 )
             self._workers[runtime.key] = worker
             return worker
+
+
+def _status_code(value: Any, default: int = 422) -> int:
+    """A worker-supplied HTTP status, or ``default`` when it is missing or not a usable error status."""
+    try:
+        code = int(value)
+    except (TypeError, ValueError):
+        return default
+    return code if 400 <= code <= 599 else default
 
 
 class _WorkerProcess:
@@ -116,6 +143,10 @@ class _WorkerProcess:
         self._request_ids = count(1)
         self._stderr: deque[str] = deque(maxlen=50)
         self._stderr_task: asyncio.Task[None] | None = None
+
+    @property
+    def alive(self) -> bool:
+        return self.process is not None and self.process.returncode is None
 
     async def start(self) -> None:
         async with self._lock:
@@ -148,15 +179,24 @@ class _WorkerProcess:
             except (BrokenPipeError, ConnectionError, asyncio.TimeoutError) as exc:
                 await self._invalidate()
                 raise WorkerRuntimeError(f"AiiDA worker request failed: {exc or 'timeout'}") from exc
+            except asyncio.CancelledError:
+                # The response to this request is still on its way; left in the pipe it would be
+                # read as the answer to the next request. Drop the worker; the pool starts a new one.
+                await asyncio.shield(self._invalidate())
+                raise
             if not raw:
-                detail = {"stderr": "\n".join(self._stderr)}
+                # stderr stays in the server log: it can hold paths and tracebacks the client has no use for.
+                log.warning("AiiDA worker stopped unexpectedly; last stderr lines:\n%s", "\n".join(self._stderr))
                 await self._invalidate()
-                raise WorkerRuntimeError("AiiDA worker stopped unexpectedly", detail=detail)
+                raise WorkerRuntimeError("AiiDA worker stopped unexpectedly")
             try:
                 response = json.loads(raw.decode())
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 await self._invalidate()
                 raise WorkerRuntimeError("AiiDA worker returned invalid JSON") from exc
+            if not isinstance(response, dict):
+                await self._invalidate()
+                raise WorkerRuntimeError("AiiDA worker returned an invalid response")
             if response.get("id") != request_id:
                 await self._invalidate()
                 raise WorkerRuntimeError("AiiDA worker returned a mismatched response")
@@ -166,7 +206,7 @@ class _WorkerProcess:
                 message = str(error.get("message") or "AiiDA worker request failed")
                 if detail.get("reason"):
                     message = f"{message}: {detail['reason']}"
-                raise WorkerRuntimeError(message, status_code=int(detail.get("status_code", 422)), detail=detail)
+                raise WorkerRuntimeError(message, status_code=_status_code(detail.get("status_code")), detail=detail)
             result = response.get("result")
             if not isinstance(result, dict):
                 raise WorkerRuntimeError("AiiDA worker returned an invalid result")
