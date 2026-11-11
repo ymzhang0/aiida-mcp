@@ -18,6 +18,11 @@ def test_reason_is_appended_to_the_message() -> None:
     assert "status_code" not in text
 
 
+def test_reason_already_in_the_message_is_not_repeated() -> None:
+    exc = WorkerRuntimeError("Node not found: no Node with ID<9>", detail={"reason": "no Node with ID<9>"})
+    assert describe_worker_error(exc) == "Node not found: no Node with ID<9>"
+
+
 def test_message_without_detail_is_unchanged() -> None:
     assert describe_worker_error(WorkerRuntimeError("AiiDA worker is offline")) == "AiiDA worker is offline"
 

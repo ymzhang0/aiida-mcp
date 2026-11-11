@@ -26,7 +26,8 @@ def describe_worker_error(exc: WorkerRuntimeError) -> str:
     if not detail:
         return message
     reason = detail.pop("reason", None)
-    if isinstance(reason, str) and reason:
+    # The worker pool already appends the reason to its message; do not repeat it.
+    if isinstance(reason, str) and reason and not message.endswith(reason):
         message = f"{message}: {reason}"
     if not detail:
         return message
