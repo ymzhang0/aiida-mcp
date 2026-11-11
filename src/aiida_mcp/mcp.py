@@ -100,8 +100,9 @@ def build_mcp_server(service: AiiDAService, *, allow_write: bool = False, plugin
     async def process_logs(identifier: str) -> dict[str, Any]: return await service.process_logs(identifier)
 
     # Workflows, codes, submission drafting
-    @tool(name="list_workflows", description="List installed workflow entry points with their description, protocols, and required inputs.", annotations=_READ_ONLY)
-    async def workflow_list() -> dict[str, Any]: return await service.workflow_catalog()
+    @tool(name="list_workflows", description="List installed entry points that can be submitted, one line each: summary and protocols. kind: 'workflow' (default), 'calculation' (single calculations such as quantumespresso.pw), or 'all'. Narrow with `query` (substring of the entry point, package or description, e.g. 'bands') or `package` (e.g. 'aiida-quantumespresso'). Inputs come from get_workflow_spec.", annotations=_READ_ONLY)
+    async def workflow_list(kind: str = "workflow", query: str | None = None, package: str | None = None) -> dict[str, Any]:
+        return compact_catalog(await service.workflow_catalog(kind), query=query, package=package)
     @tool(name="get_workflow_spec", description="Inputs of a workflow or calculation entry point (e.g. 'quantumespresso.pw.base'), one line per port, plus its protocols and get_builder_from_protocol arguments. Not needed when you submit with a protocol and already know the arguments. Pass port_path to expand a namespace.", annotations=_READ_ONLY)
     async def workflow_spec(entry_point: str, port_path: str | None = None) -> dict[str, Any]: return compact_spec(await service.workflow_spec(entry_point), port_path)
     @tool(name="find_input_candidates", description="List stored nodes compatible with one input port, e.g. port_path='pw.structure'.", annotations=_READ_ONLY)
@@ -110,7 +111,7 @@ def build_mcp_server(service: AiiDAService, *, allow_write: bool = False, plugin
     async def code_list(computer_label: str | None = None) -> dict[str, Any]: return await service.code_list(computer_label)
     @tool(name="validate_submission", description="Build and validate a process builder without storing or submitting anything. Give explicit `inputs`, or omit them and give `protocol` plus `protocol_arguments` (and optional `overrides`) for get_builder_from_protocol. Protocol arguments accept {\"pk\": N} node references, dicts of codes ({\"pw\": \"pw@cluster\"}), and enum names as strings ('SCDM', 'METAL'). After the builder is built, `calcjob_options` (e.g. {\"resources\": {...}, \"queue_name\": \"...\", \"max_wallclock_seconds\": 3600}) is applied to every calculation in it, and `builder_updates` sets dotted paths, e.g. {\"epw_base.parallelization\": {\"npool\": 16}, \"w90_bands.projwfc.projwfc.settings\": {\"CMDLINE\": [\"-nd\", \"1\"]}} (Dicts are merged).", annotations=_READ_ONLY)
     async def submission_draft(entry_point: str, inputs: dict[str, Any] | None = None, protocol: str | None = None, protocol_arguments: dict[str, Any] | None = None, overrides: dict[str, Any] | None = None, calcjob_options: dict[str, Any] | None = None, builder_updates: dict[str, Any] | None = None) -> dict[str, Any]:
-        return await service.submission_draft(_draft(entry_point, inputs, protocol, protocol_arguments, overrides, calcjob_options=calcjob_options, builder_updates=builder_updates))
+        return compact_draft(await service.submission_draft(_draft(entry_point, inputs, protocol, protocol_arguments, overrides, calcjob_options=calcjob_options, builder_updates=builder_updates)))
 
     # Structure databases (OPTIMADE)
     @tool(name="search_structures", description="Search a structure database over OPTIMADE and return one compact row per match (id, formula, nsites, lattice lengths, and per-database extras: MC3D total/per-atom energy and original source, MC2D band gap, MP energy above hull). provider: 'mc3d' (Materials Cloud 3D, relaxed with AiiDA, PBE), 'mc2d' (Materials Cloud 2D layers, non-periodic along z), or 'mp' (Materials Project). Give `formula` (any order, e.g. 'SiO2') and/or `elements` (+ elements_only to exclude extra elements), optional max_sites.", annotations=_REMOTE_READ)
@@ -257,6 +258,51 @@ def compact_spec(spec: dict[str, Any], port_path: str | None = None) -> dict[str
         if spec.get(key):
             out[key] = spec[key]
     out["note"] = "Compact spec; pass port_path (e.g. 'pw') to expand a namespace."
+    return out
+
+
+def _summary_line(text: Any, limit: int = 110) -> str:
+    """First sentence of a docstring, on one line."""
+    line = " ".join(str(text or "").split())
+    line = line.split(". ")[0].rstrip(".")
+    return line if len(line) <= limit else line[: limit - 3] + "..."
+
+
+def compact_catalog(catalog: dict[str, Any], *, query: str | None = None, package: str | None = None) -> dict[str, Any]:
+    """One line per entry point; the full docstring and port list stay in get_workflow_spec."""
+    needle = str(query or "").strip().lower()
+    wanted_package = str(package or "").strip().lower()
+    listed: dict[str, dict[str, str]] = {}
+    unavailable: dict[str, str] = {}
+    for item in catalog.get("workflows") or []:
+        name = str(item.get("entry_point") or "")
+        if wanted_package and str(item.get("plugin_package") or "").lower() != wanted_package:
+            continue
+        if needle and not any(needle in str(item.get(key) or "").lower() for key in ("entry_point", "plugin_package", "description")):
+            continue
+        if not item.get("loadable"):
+            reason = [line.strip() for line in str(item.get("load_error") or "").splitlines() if line.strip()]
+            unavailable[name] = (reason[-1] if reason else "could not be loaded")[:160]
+            continue
+        parts = [_summary_line(item.get("description")) or str(item.get("process_class") or "").rsplit(".", 1)[-1]]
+        if item.get("protocols"):
+            parts.append("protocols: " + ", ".join(item["protocols"]))
+        listed.setdefault(str(item.get("kind") or "workflow") + "s", {})[name] = " | ".join(parts)
+    out: dict[str, Any] = {**listed, "count": sum(len(group) for group in listed.values())}
+    if unavailable:
+        out["unavailable"] = unavailable
+    out["note"] = "get_workflow_spec(entry_point) lists the inputs. Entries with protocols can be submitted with `protocol` + `protocol_arguments`."
+    return out
+
+
+def compact_draft(result: dict[str, Any]) -> dict[str, Any]:
+    """Drop the echo of what the caller just sent; keep the resolved inputs and what is wrong."""
+    keep = ["success", "status", "entry_point", "builder_strategy", "builder_inputs", "errors", "missing_ports"]
+    out = {key: result[key] for key in keep if key in result and result[key] not in ([], {}, None)}
+    out.setdefault("success", bool(result.get("success")))
+    if not out["success"] and result.get("signature"):
+        # Only useful when the call was wrong: the arguments get_builder_from_protocol takes.
+        out["protocol_arguments"] = [f"{item.get('name')}{'' if item.get('required') else '?'}" for item in result["signature"] if item.get("name") not in ("protocol", "overrides")]
     return out
 
 

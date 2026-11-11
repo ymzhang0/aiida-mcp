@@ -6,7 +6,7 @@ from typing import Any, Iterable, Mapping
 
 from aiida import orm
 from aiida.engine.processes.ports import PortNamespace
-from aiida.plugins import WorkflowFactory
+from aiida.plugins import CalculationFactory, WorkflowFactory
 from aiida.plugins.entry_point import get_entry_point_names
 
 from aiida_mcp.core.engine import ensure_profile_loaded
@@ -41,14 +41,31 @@ def _supported_protocols(process_class: type[Any]) -> list[str]:
     return []
 
 
-def workflow_catalog() -> dict[str, Any]:
-    """Return deterministic metadata for every registered AiiDA workflow entry point."""
+_CATALOG_GROUPS = {"workflow": ("aiida.workflows", WorkflowFactory), "calculation": ("aiida.calculations", CalculationFactory)}
+
+
+def workflow_catalog(kind: str = "all") -> dict[str, Any]:
+    """Return deterministic metadata for every registered workflow and calculation entry point.
+
+    ``kind`` is 'workflow', 'calculation' or 'all'. Both kinds are submitted the same way.
+    """
     ensure_profile_loaded()
+    kinds = list(_CATALOG_GROUPS) if kind in (None, "", "all") else [str(kind)]
     workflows: list[dict[str, Any]] = []
-    for entry_point in sorted(get_entry_point_names("aiida.workflows")):
-        package, version = _distribution_for_entry_point("aiida.workflows", entry_point)
+    for selected in kinds:
+        if selected not in _CATALOG_GROUPS:
+            raise ValueError(f"kind must be one of: all, {', '.join(_CATALOG_GROUPS)}")
+        workflows.extend(_catalog_for(selected, *_CATALOG_GROUPS[selected]))
+    return {"workflows": workflows, "count": len(workflows)}
+
+
+def _catalog_for(kind: str, group: str, factory: Any) -> list[dict[str, Any]]:
+    workflows: list[dict[str, Any]] = []
+    for entry_point in sorted(get_entry_point_names(group)):
+        package, version = _distribution_for_entry_point(group, entry_point)
         descriptor: dict[str, Any] = {
             "entry_point": entry_point,
+            "kind": kind,
             "plugin_package": package,
             "plugin_version": version,
             "loadable": False,
@@ -59,7 +76,7 @@ def workflow_catalog() -> dict[str, Any]:
             "required_inputs": [],
         }
         try:
-            process_class = WorkflowFactory(entry_point)
+            process_class = factory(entry_point)
             descriptor.update(
                 {
                     "loadable": True,
@@ -76,9 +93,11 @@ def workflow_catalog() -> dict[str, Any]:
             spec = serialize_spec(process_class.spec().inputs)
             descriptor["required_inputs"] = _required_paths(spec)
         except Exception as exc:  # noqa: BLE001 - one broken plugin must not hide the catalog
+            # A class whose spec() raises cannot be submitted either: do not advertise it as loadable.
+            descriptor["loadable"] = False
             descriptor["load_error"] = str(exc)
         workflows.append(descriptor)
-    return {"workflows": workflows, "count": len(workflows)}
+    return workflows
 
 
 def _required_paths(spec: Mapping[str, Any], prefix: str = "") -> list[str]:

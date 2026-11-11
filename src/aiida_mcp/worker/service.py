@@ -473,10 +473,10 @@ class AiiDAWorkerService:
         return {"plugins": plugins}
 
     @staticmethod
-    def _workflow_catalog(_: dict[str, Any]) -> Mapping[str, Any]:
+    def _workflow_catalog(params: dict[str, Any]) -> Mapping[str, Any]:
         from aiida_mcp.core.workflow_discovery import workflow_catalog
 
-        return workflow_catalog()
+        return workflow_catalog(str(params.get("kind") or "all"))
 
     @staticmethod
     def _workflow_input_candidates(params: dict[str, Any]) -> Mapping[str, Any]:

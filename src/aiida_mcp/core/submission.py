@@ -588,9 +588,10 @@ def _build_builder_result(params: Mapping[str, Any]) -> dict[str, Any]:
         except Exception as exc:
             errors.append({"stage": "builder_updates", "message": str(exc)})
 
-    # A failed binding leaves the builder empty; listing every required port as missing would bury the cause.
+    # When no builder could be built (bad binding, missing protocol argument) every required port
+    # would be reported as missing and bury the cause.
     bind_failed = any(error.get("stage") == "bind_explicit_inputs" for error in errors)
-    missing_ports = [] if bind_failed else _list_missing_required_ports(spec_inputs, builder_inputs)
+    missing_ports = [] if bind_failed or builder is None else _list_missing_required_ports(spec_inputs, builder_inputs)
     for missing in missing_ports:
         errors.append(
             {

@@ -61,7 +61,7 @@ class AiiDAService:
     async def process_restart(self, params: dict[str, Any]) -> dict[str, Any]: return await self._call("process.restart", dict(params))
 
     # Workflows and submission
-    async def workflow_catalog(self) -> dict[str, Any]: return await self._call("workflow.catalog")
+    async def workflow_catalog(self, kind: str = "all") -> dict[str, Any]: return await self._call("workflow.catalog", {"kind": str(kind or "all")})
     async def workflow_spec(self, entry_point: str) -> dict[str, Any]: return await self._call("submission.spec", {"entry_point": str(entry_point)})
     async def workflow_input_candidates(self, entry_point: str, port_path: str, *, limit: int = 50) -> dict[str, Any]:
         return await self._call("workflow.input_candidates", {"entry_point": str(entry_point), "port_path": str(port_path), "limit": max(1, min(int(limit), 200))})

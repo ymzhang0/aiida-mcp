@@ -215,3 +215,34 @@ def test_failed_discovery_is_not_cached(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(plugins, "_query_manifest", lambda _runtime, *, timeout: None)
     assert plugins.discover_plugin_tools(runtime) == []
     assert not plugins._cache_path(runtime).exists()
+
+
+def test_catalog_is_one_line_per_entry_point_and_can_be_filtered() -> None:
+    from aiida_mcp.mcp import compact_catalog
+
+    catalog = {"workflows": [
+        {"entry_point": "quantumespresso.pw.base", "kind": "workflow", "plugin_package": "aiida-quantumespresso", "loadable": True, "process_class": "x.PwBaseWorkChain",
+         "description": "Workchain to run a pw.x calculation with restarts.\n\nLong text. " * 5, "protocols": ["fast", "balanced"], "required_inputs": ["pw.structure"]},
+        {"entry_point": "quantumespresso.pw", "kind": "calculation", "plugin_package": "aiida-quantumespresso", "loadable": True, "process_class": "x.PwCalculation", "description": None, "protocols": []},
+        {"entry_point": "sctk.base", "kind": "workflow", "plugin_package": "aiida-sctk", "loadable": False, "load_error": "Failed to load\nTraceback\nImportError: no module x"},
+    ]}
+
+    full = compact_catalog(catalog)
+    assert full["workflows"] == {"quantumespresso.pw.base": "Workchain to run a pw.x calculation with restarts | protocols: fast, balanced"}
+    assert full["calculations"] == {"quantumespresso.pw": "PwCalculation"}
+    assert full["unavailable"] == {"sctk.base": "ImportError: no module x"}
+    assert full["count"] == 2
+    assert "required_inputs" not in str(full)
+    assert set(compact_catalog(catalog, package="aiida-sctk")) == {"count", "unavailable", "note"}
+    assert compact_catalog(catalog, query="RESTARTS")["count"] == 1
+
+
+def test_draft_result_does_not_echo_the_request() -> None:
+    from aiida_mcp.mcp import compact_draft
+
+    ready = compact_draft({"success": True, "status": "DRAFT_READY", "entry_point": "e", "inputs": {"x": 1}, "intent_data": {}, "overrides": {}, "signature": [{"name": "code", "required": True}],
+                           "builder_inputs": {"x": 1}, "errors": [], "missing_ports": [], "recovery_plan": {}, "preview": "Ready"})
+    assert ready == {"success": True, "status": "DRAFT_READY", "entry_point": "e", "builder_inputs": {"x": 1}}
+    invalid = compact_draft({"success": False, "status": "DRAFT_INVALID", "entry_point": "e", "inputs": {}, "builder_inputs": {}, "errors": [{"stage": "s", "message": "m"}], "missing_ports": ["x"],
+                             "signature": [{"name": "code", "required": True}, {"name": "protocol", "required": False}, {"name": "kpoints", "required": False}]})
+    assert invalid == {"success": False, "status": "DRAFT_INVALID", "entry_point": "e", "errors": [{"stage": "s", "message": "m"}], "missing_ports": ["x"], "protocol_arguments": ["code", "kpoints?"]}
