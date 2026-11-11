@@ -278,7 +278,7 @@ class AiiDAWorkerService:
             same_interpreter = False
         if not same_interpreter:
             raise ValueError(
-                "environment.inspect cannot switch Python inside a worker; ARIS must start the project-scoped worker with that interpreter"
+                "environment.inspect cannot switch Python inside a worker; start the server with AIIDA_MCP_PYTHON set to that interpreter"
             )
         return await get_execution_runtime().inspect_environment(
             python_interpreter_path=sys.executable,

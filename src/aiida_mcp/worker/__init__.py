@@ -1,4 +1,4 @@
-"""Transport-independent AiiDA runtime primitives used by ARIS."""
+"""Transport-independent AiiDA runtime primitives used by the MCP server."""
 
 from aiida_mcp.worker.protocol import JsonRpcError, JsonRpcRequest, JsonRpcResponse
 from aiida_mcp.worker.service import AiiDAWorkerService
