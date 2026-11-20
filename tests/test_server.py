@@ -57,3 +57,19 @@ def test_public_bind_needs_a_token(monkeypatch) -> None:
         require_token_for_host("0.0.0.0")
     monkeypatch.setenv("AIIDA_MCP_TOKEN", "secret")
     require_token_for_host("0.0.0.0")
+
+
+def test_stdio_server_exits_when_its_client_is_gone():
+    import subprocess, sys, time
+    code = ("import time; from aiida_mcp.server import exit_with_parent; "
+            "exit_with_parent(0.1, parent=999999999); time.sleep(30)")
+    start = time.monotonic()
+    completed = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=20)
+    assert completed.returncode == 0
+    assert "exited; stopping the server" in completed.stderr
+    assert time.monotonic() - start < 15
+
+
+def test_detached_server_is_not_watched():
+    from aiida_mcp.server import exit_with_parent
+    assert exit_with_parent(0.1, parent=1) is None

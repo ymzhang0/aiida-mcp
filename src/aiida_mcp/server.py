@@ -4,6 +4,9 @@ import argparse
 import json
 import os
 import secrets
+import sys
+import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 import uvicorn
@@ -107,6 +110,27 @@ def create_app(*, runtime: RuntimeConfig | None = None, workers: WorkerRuntimePo
     app.mount("/mcp", mcp_app)
     return app
 
+def exit_with_parent(interval: float = 5.0, *, parent: int | None = None) -> threading.Thread | None:
+    """Exit this process once the client that started it is gone.
+
+    A stdio server normally stops at EOF on stdin, but EOF never comes when another process inherited the write end
+    of the pipe, and the server (with its AiiDA worker and database connection) then lives on under init. Watching
+    for reparenting catches that. The worker exits by itself at EOF on its own stdin once this process is gone.
+    Nothing is watched when the server was started detached (parent already init).
+    """
+    parent = os.getppid() if parent is None else parent
+    if parent <= 1:
+        return None
+    def watch() -> None:
+        while True:
+            time.sleep(interval)
+            if os.getppid() != parent:
+                print(f"aiida-mcp: client process {parent} exited; stopping the server", file=sys.stderr, flush=True)
+                os._exit(0)
+    thread = threading.Thread(target=watch, name="aiida-mcp-parent-watch", daemon=True)
+    thread.start()
+    return thread
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="aiida-mcp")
     parser.add_argument("serve", nargs="?")
@@ -116,10 +140,13 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--read-only", action="store_true", help="Disable submission, process control, and write plugin tools (or set AIIDA_MCP_READ_ONLY=1).")
     parser.add_argument("--no-plugins", action="store_true", help="Do not load tools from the aiida_mcp.tools entry-point group.")
     args = parser.parse_args(argv)
+    stdio = os.environ.get("AIIDA_MCP_TRANSPORT", "").lower() == "stdio"
+    if stdio:
+        exit_with_parent()   # before plugin discovery, which can take a while on a cold start
     runtime = runtime_config(python_interpreter=args.python_interpreter, profile=args.profile, workspace=args.workspace)
     allow_write = allow_write_default() and not args.read_only
     plugin_tools = [] if args.no_plugins else discover_plugin_tools(runtime)
-    if os.environ.get("AIIDA_MCP_TRANSPORT", "").lower() == "stdio":
+    if stdio:
         build_mcp_server(AiiDAService(runtime, WorkerRuntimePool()), allow_write=allow_write, plugin_tools=plugin_tools).run(transport="stdio")
         return
     host = os.environ.get("AIIDA_MCP_HOST", "127.0.0.1")
