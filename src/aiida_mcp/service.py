@@ -9,12 +9,15 @@ from uuid import UUID
 
 from .runtime import Runtime, WorkerRuntimePool
 
+EXPORT_TIMEOUT = 1800.0
+
 
 @dataclass(frozen=True)
 class RuntimeConfig:
     python_interpreter_path: str
     aiida_profile: str
     workspace_path: str | None = None
+    source: str = ""  # where the profile came from, e.g. the project.yaml path
 
 
 class AiiDAService:
@@ -24,7 +27,10 @@ class AiiDAService:
         self.runtime = runtime
         self.workers = workers
 
-    async def status(self) -> dict[str, Any]: return await self._call("runtime.status")
+    async def status(self) -> dict[str, Any]:
+        selected = {"profile_source": self.runtime.source, "workspace": self.runtime.workspace_path}
+        return {**await self._call("runtime.status"), **{key: value for key, value in selected.items() if value}}
+    async def recent_processes(self, *, limit: int = 15) -> dict[str, Any]: return await self._call("process.recent", {"limit": max(1, min(int(limit), 200)), "root_only": False})
     async def nodes(self, *, limit: int = 50, node_type: str | None = None) -> dict[str, Any]:
         params: dict[str, Any] = {"limit": max(1, min(int(limit), 200)), "root_only": False}
         if node_type: params["node_type"] = node_type
@@ -49,6 +55,9 @@ class AiiDAService:
     async def provenance_subgraph(self, group_uuid: str, root_uuid: str, *, depth: int = 2) -> dict[str, Any]: return await self._call("provenance.subgraph", {"group_uuid": group_uuid, "root_uuid": root_uuid, "depth": max(0, min(int(depth), 6))})
     async def provenance_node_detail(self, group_uuid: str, uuid: str) -> dict[str, Any]: return await self._call("provenance.node_detail", {"group_uuid": group_uuid, "uuid": uuid})
     async def archive_inspect(self, path: str) -> dict[str, Any]: return await self._call("archive.inspect", {"path": str(path)})
+    # Exports walk whole provenance trees: allow them far longer than an ordinary request.
+    async def archive_export(self, params: dict[str, Any]) -> dict[str, Any]: return await self._call("archive.export", dict(params), timeout=EXPORT_TIMEOUT)
+    async def files_dump(self, params: dict[str, Any]) -> dict[str, Any]: return await self._call("files.dump", dict(params), timeout=EXPORT_TIMEOUT)
 
     # Processes
     async def process_list(self, *, limit: int = 20, process_state: str | None = None, label: str | None = None, root_only: bool = True, days: int | None = None, group_uuid: str | None = None) -> dict[str, Any]:
@@ -104,6 +113,7 @@ class AiiDAService:
     async def plugin_manifest(self) -> dict[str, Any]: return await self._call("plugins.manifest")
     async def plugin_call(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]: return await self._call("plugins.call", {"tool": tool, "arguments": dict(arguments)})
 
-    async def _call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def _call(self, method: str, params: dict[str, Any] | None = None, *, timeout: float | None = None) -> dict[str, Any]:
         runtime = Runtime("configured-runtime", self.runtime.python_interpreter_path, self.runtime.aiida_profile, self.runtime.workspace_path)
-        return await self.workers.request(runtime, method, params)
+        if timeout is None: return await self.workers.request(runtime, method, params)
+        return await self.workers.request(runtime, method, params, timeout=timeout)

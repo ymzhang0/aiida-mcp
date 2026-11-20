@@ -1,10 +1,13 @@
 """One local generic AiiDA MCP server for an explicitly selected runtime."""
 from __future__ import annotations
 import argparse
+import json
 import os
 import secrets
 from contextlib import asynccontextmanager
+from pathlib import Path
 import uvicorn
+import yaml
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from .api import build_router
@@ -12,11 +15,45 @@ from .mcp import build_mcp_server
 from .plugins import discover_plugin_tools
 from .runtime import WorkerRuntimePool
 from .service import AiiDAService, RuntimeConfig
+def find_project(start: Path) -> tuple[Path, dict] | None:
+    """The nearest project.yaml at or above `start` that names an AiiDA profile (runtime.aiida_profile)."""
+    for directory in [start, *start.parents]:
+        candidate = directory / "project.yaml"
+        if not candidate.is_file(): continue
+        try: data = yaml.safe_load(candidate.read_text())
+        except (OSError, yaml.YAMLError): continue
+        declared = data.get("runtime") if isinstance(data, dict) else None
+        if isinstance(declared, dict) and str(declared.get("aiida_profile") or "").strip(): return directory, declared
+    return None
+
+def default_profile() -> str | None:
+    """The default profile of the AiiDA config dir the workers will use."""
+    bases = [item for item in [os.environ.get("AIIDA_MCP_AIIDA_PATH"), *str(os.environ.get("AIIDA_PATH") or "").split(os.pathsep)] if item]
+    for base in [*bases, str(Path.home())]:
+        try: name = json.loads((Path(base).expanduser() / ".aiida" / "config.json").read_text()).get("default_profile")
+        except (OSError, ValueError, AttributeError): continue
+        if name: return str(name)
+    return None
+
 def runtime_config(*, python_interpreter: str | None = None, profile: str | None = None, workspace: str | None = None) -> RuntimeConfig:
-    python = python_interpreter or os.environ.get("AIIDA_MCP_PYTHON")
-    selected_profile = profile or os.environ.get("AIIDA_MCP_PROFILE")
-    if not python or not selected_profile: raise ValueError("AIIDA_MCP_PYTHON and AIIDA_MCP_PROFILE are required")
-    return RuntimeConfig(python, selected_profile, workspace or os.environ.get("AIIDA_MCP_WORKSPACE"))
+    """Which Python, profile and workspace this server uses.
+
+    The profile is the one of the project being worked on: the nearest project.yaml at or above the
+    workspace (default: the directory the server was started in) names it as runtime.aiida_profile,
+    and may name runtime.python_interpreter. Outside a project, AIIDA_MCP_PROFILE and then the
+    default profile are used. --profile overrides everything.
+    """
+    workspace = workspace or os.environ.get("AIIDA_MCP_WORKSPACE")
+    start = Path(workspace or os.getcwd()).expanduser().resolve()
+    root, declared = find_project(start) or (None, {})
+    if profile: source = "--profile"
+    elif declared: profile, source = str(declared["aiida_profile"]).strip(), str(root / "project.yaml")
+    elif os.environ.get("AIIDA_MCP_PROFILE"): profile, source = os.environ["AIIDA_MCP_PROFILE"], "AIIDA_MCP_PROFILE"
+    else: profile, source = default_profile(), "default profile (no project.yaml above the start directory)"
+    python = python_interpreter or declared.get("python_interpreter") or os.environ.get("AIIDA_MCP_PYTHON")
+    if not python: raise ValueError("No Python interpreter: set AIIDA_MCP_PYTHON or runtime.python_interpreter in project.yaml")
+    if not profile: raise ValueError("No AiiDA profile: start the server inside a project (project.yaml with runtime.aiida_profile), or set AIIDA_MCP_PROFILE")
+    return RuntimeConfig(str(python), profile, workspace or str(root or start), source)
 
 def allow_write_default() -> bool:
     return os.environ.get("AIIDA_MCP_READ_ONLY", "").strip().lower() not in {"1", "true", "yes"}

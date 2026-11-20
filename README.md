@@ -21,17 +21,30 @@ directly over MCP, as described below.
 
 ## Run the server
 
-Start one instance for one human-selected runtime:
+Start one instance inside the project you want to work on:
 
 ```bash
-AIIDA_MCP_PYTHON=/path/to/project/.venv/bin/python \
-AIIDA_MCP_PROFILE=silicon \
-AIIDA_MCP_WORKSPACE=/path/to/project \
-uv run aiida-mcp serve            # add --read-only to disable all writes
+cd /path/to/project
+AIIDA_MCP_PYTHON=/path/to/env/bin/python uv run aiida-mcp serve   # add --read-only to disable all writes
 ```
 
-The Python environment and profile are fixed when the server starts; tools
-cannot change either. The server listens on `127.0.0.1:8043` by default
+The profile is not preset: it is the profile of the project the server starts
+in. The server looks for the nearest `project.yaml` at or above the start
+directory (or `AIIDA_MCP_WORKSPACE` / `--workspace`) and reads
+
+```yaml
+runtime:
+  aiida_profile: silicon
+  python_interpreter: /path/to/env/bin/python   # optional, replaces AIIDA_MCP_PYTHON
+```
+
+The project folder becomes the workspace. Outside a project the server falls
+back to `AIIDA_MCP_PROFILE`, then to the default profile of the AiiDA config
+dir; `--profile` overrides all of these. `get_status` reports the profile and
+where it came from. The Python environment and profile are fixed once the
+server has started; tools cannot change either.
+
+The server listens on `127.0.0.1:8043` by default
 (`AIIDA_MCP_HOST`, `AIIDA_MCP_PORT`). Use `AIIDA_MCP_TRANSPORT=stdio` for
 agents that launch MCP servers as subprocesses.
 
@@ -53,12 +66,14 @@ agents that launch MCP servers as subprocesses.
 | Clusters and codes | `list_ssh_hosts`, `list_computers`, `check_code`, **`create_computer`**, **`create_code`** |
 | Control work | **`kill_processes`**, **`pause_processes`**, **`resume_processes`** |
 | Explore data | `list_nodes`, `get_node`, `get_node_links`, `compare_nodes`, `list_groups`, `get_group`, `get_ancestors`, `get_descendants`, `list_provenance_roots`, `get_provenance_subgraph`, `inspect_archive`, `get_status` |
+| Take data out | `export_archive` (Groups and nodes to an `.aiida` file), `dump_files` (input and retrieved output files of processes, one folder per call-tree step) |
 | Plugins | named after the plugin's functions, e.g. `diagnose_process` |
 
 Tools in **bold** change the profile. They carry MCP `readOnlyHint: false`, and
 kill also carries `destructiveHint: true`, so agent clients ask before running
 them. `--read-only` or `AIIDA_MCP_READ_ONLY=1` removes them, together with any
-plugin tool not marked read-only.
+plugin tool not marked read-only. `export_archive` and `dump_files` write files
+under the workspace only, never to the profile, and stay available.
 
 `create_computer` and `create_code` only create. They refuse a
 label that already exists, so an agent cannot reconfigure a computer that has

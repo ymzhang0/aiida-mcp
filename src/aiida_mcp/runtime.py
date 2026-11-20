@@ -68,9 +68,11 @@ class WorkerRuntimePool:
         runtime: Runtime,
         method: str,
         params: Mapping[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         worker = await self._worker_for(runtime)
-        return await worker.request(method, dict(params or {}), context=runtime.context())
+        return await worker.request(method, dict(params or {}), context=runtime.context(), timeout=timeout)
 
     async def stop(self) -> None:
         workers = list(self._workers.values())
@@ -165,7 +167,7 @@ class _WorkerProcess:
             )
             self._stderr_task = asyncio.create_task(self._collect_stderr(self.process))
 
-    async def request(self, method: str, params: dict[str, Any], *, context: dict[str, str]) -> dict[str, Any]:
+    async def request(self, method: str, params: dict[str, Any], *, context: dict[str, str], timeout: float | None = None) -> dict[str, Any]:
         async with self._lock:
             process = self.process
             if process is None or process.returncode is not None or process.stdin is None or process.stdout is None:
@@ -175,7 +177,7 @@ class _WorkerProcess:
             try:
                 process.stdin.write((json.dumps(payload) + "\n").encode())
                 await process.stdin.drain()
-                raw = await asyncio.wait_for(process.stdout.readline(), timeout=self.request_timeout)
+                raw = await asyncio.wait_for(process.stdout.readline(), timeout=timeout or self.request_timeout)
             except (BrokenPipeError, ConnectionError, asyncio.TimeoutError) as exc:
                 await self._invalidate()
                 raise WorkerRuntimeError(f"AiiDA worker request failed: {exc or 'timeout'}") from exc

@@ -83,6 +83,8 @@ class AiiDAWorkerService:
             "provenance.subgraph": self._provenance_subgraph,
             "provenance.node_detail": self._provenance_node_detail,
             "archive.inspect": self._archive_inspect,
+            "archive.export": self._archive_export,
+            "files.dump": self._files_dump,
             "group.create": self._group_create,
             "group.delete": self._group_delete,
             "group.rename": self._group_rename,
@@ -976,6 +978,32 @@ class AiiDAWorkerService:
 
         ensure_profile_loaded()
         return compare_nodes(left, right, max_depth=int(params.get("max_depth", 2)), max_differences=int(params.get("max_differences", 100)))
+
+    @staticmethod
+    def _archive_export(params: dict[str, Any]) -> Mapping[str, Any]:
+        from aiida_mcp.core.engine import ensure_profile_loaded
+        from aiida_mcp.worker.application.export_service import export_archive
+        ensure_profile_loaded()
+        return export_archive(
+            str(params.get("path") or ""),
+            groups=list(params.get("groups") or []),
+            nodes=list(params.get("nodes") or []),
+            overwrite=bool(params.get("overwrite")),
+            workspace_path=_context_value(params, "workspace_path"),
+        )
+
+    @staticmethod
+    def _files_dump(params: dict[str, Any]) -> Mapping[str, Any]:
+        from aiida_mcp.core.engine import ensure_profile_loaded
+        from aiida_mcp.worker.application.export_service import dump_files
+        ensure_profile_loaded()
+        return dump_files(
+            str(params.get("path") or ""),
+            nodes=list(params.get("nodes") or []),
+            group=params.get("group"),
+            max_file_mb=float(params.get("max_file_mb") or 50),
+            workspace_path=_context_value(params, "workspace_path"),
+        )
 
     @staticmethod
     def _archive_inspect(params: dict[str, Any]) -> Mapping[str, Any]:

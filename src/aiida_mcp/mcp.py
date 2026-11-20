@@ -14,18 +14,23 @@ log = logging.getLogger(__name__)
 _READ_ONLY = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}
 _WRITE = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False}
 _DESTRUCTIVE = {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": False}
+_LOCAL_FILE = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}
 _REMOTE_READ = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True}
 _REMOTE_WRITE = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True}
 
-_INSTRUCTIONS = """AiiDA tools for the single Python environment and profile selected when this server started.
+_INSTRUCTIONS = """AiiDA tools for one Python environment and one profile, chosen when this server started: the profile of the
+project it was started in (runtime.aiida_profile in the nearest project.yaml), else AIIDA_MCP_PROFILE, else the default
+profile. get_status names the profile and where it came from; it cannot change during a session.
 Checking work: list_processes (filter by process_state such as waiting/running/finished/excepted/killed)
 -> get_process / get_process_logs / get_descendants for one process.
 Running work: list_workflows -> get_workflow_spec -> list_codes / find_input_candidates
 (search_structures + import_structure for known materials, else create_structure) -> validate_submission (validates, stores nothing) -> submit
--> wait_for_process (do not poll get_process in a loop). If it failed: get_process / diagnose_process explain why;
+-> wait_for_process (do not poll get_process in a loop). If it failed: get_process / get_process_logs explain why;
 after the fix is agreed, restart_process (dry_run first) resubmits it, reusing finished steps. A paused process only needs resume_processes.
 Setting up a cluster: list_ssh_hosts / list_computers -> create_computer (tests the connection
 first, stores nothing on failure) -> check_code -> create_code. Existing computers and codes are never modified.
+Taking data out: export_archive writes an .aiida archive of Groups and nodes; dump_files writes the input and retrieved
+output files of processes into folders. Both write under the workspace only.
 Input values: plain JSON for base types (2 -> Int, {"a": 1} -> Dict); reference stored nodes as {"pk": N} or
 {"uuid": "..."}; codes as "label@computer". A bare number is never guessed between a value and a PK: where a port
 could take either (e.g. Data) the call is rejected, so pass {"value": v} for a new literal or {"pk": N} for a node.
@@ -76,6 +81,14 @@ def build_mcp_server(service: AiiDAService, *, allow_write: bool = False, plugin
     async def provenance_subgraph(group_uuid: str, root_uuid: str, depth: int = 2) -> dict[str, Any]: return await service.provenance_subgraph(group_uuid, root_uuid, depth=depth)
     @tool(name="inspect_archive", description="Read a workspace-relative AiiDA archive summary without importing it.", annotations=_READ_ONLY)
     async def archive_inspect(path: str) -> dict[str, Any]: return await service.archive_inspect(path)
+
+    # Exports: they write files under the workspace and never change the profile.
+    @tool(name="export_archive", description="Write an AiiDA archive (.aiida) to a workspace-relative `path`, holding the given `groups` (labels, UUIDs or PKs; each with all its nodes) and/or `nodes` (PKs or UUIDs), plus the provenance AiiDA's default export rules pull in (inputs and creators; for processes also what they called and returned). An existing file is kept unless overwrite=true. Large Groups can take minutes.", annotations=_LOCAL_FILE)
+    async def archive_export(path: str, groups: list[str] | None = None, nodes: list[str] | None = None, overwrite: bool = False) -> dict[str, Any]:
+        return await service.archive_export({"path": path, "groups": groups or [], "nodes": nodes or [], "overwrite": overwrite})
+    @tool(name="dump_files", description="Copy the files of processes into folders under a workspace-relative `path`, to read or grep them locally. Give `nodes` (PKs or UUIDs) and/or one `group` (label, UUID or PK; every process in it). Each process gets a folder '<process label>-<pk>' that mirrors its call tree by call-link label; every calculation job folder holds its input files and its retrieved outputs (e.g. aiida.in, aiida.out, scheduler stdout/stderr). Data nodes with files (FolderData, SinglefileData, ...) are copied as they are. Files above max_file_mb are skipped and listed. Existing files of the same name are overwritten.", annotations=_LOCAL_FILE)
+    async def files_dump(path: str, nodes: list[str] | None = None, group: str | None = None, max_file_mb: float = 50) -> dict[str, Any]:
+        return await service.files_dump({"path": path, "nodes": nodes or [], "group": group, "max_file_mb": max_file_mb})
 
     # Processes
     @tool(name="list_processes", description="List processes newest first. Filter by process_state (created, waiting, running, finished, excepted, killed), label/process-label substring or PK, age in days, or Group UUID. root_only=False includes sub-processes.", annotations=_READ_ONLY)
