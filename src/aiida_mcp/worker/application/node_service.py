@@ -273,6 +273,9 @@ def _soft_delete_node(pk: int, *, deleted: bool = True) -> dict[str, Any]:
 
 
 
+_ROOT_SCAN_LIMIT = 100_000  # newest rows examined when looking for root processes
+
+
 def _get_recent_nodes(
     limit: int = 15,
     group_uuid: str | None = None,
@@ -347,26 +350,50 @@ def _get_recent_nodes(
         qb.add_filter("node", node_filters)
 
     qb.order_by({"node": {"ctime": "desc"}})
-    qb.limit(max(normalized_limit * 4, normalized_limit))
+
+    def _fetch(offset: int, size: int) -> list[Any]:
+        qb.offset(offset)
+        qb.limit(size)
+        try:
+            with db_access_guard("recent-nodes"):
+                return qb.all()
+        except WorkerDomainError:
+            raise
+        except SQLAlchemyTimeoutError as exc:
+            raise WorkerDomainError("runtime_unavailable", "Database temporarily unavailable", endpoint="recent-nodes", reason=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise WorkerDomainError("internal_error", "Failed to query recent nodes", endpoint="recent-nodes", reason=str(exc)) from exc
+
+    def _called(pks: list[int]) -> set[int]:
+        """Of these PKs, the ones another process called (so not roots)."""
+        if not pks:
+            return set()
+        with db_access_guard("recent-nodes-callers"):
+            qb_caller = QueryBuilder()
+            qb_caller.append(Node, filters={"id": {"in": pks}}, project="id", tag="called")
+            qb_caller.append(Node, with_outgoing="called", edge_filters={"type": {"like": "call%"}})
+            return {int(pk) for (pk,) in qb_caller.distinct().all()}
 
     try:
-        with db_access_guard("recent-nodes"):
-            rows = qb.all()
-    except WorkerDomainError as exc:
+        if not root_only:
+            rows = _fetch(0, max(normalized_limit * 4, normalized_limit))
+        else:
+            # A workflow calls many sub-processes, so the newest rows are mostly not roots:
+            # keep reading older pages until enough roots are found.
+            rows, offset, size = [], 0, max(normalized_limit * 4, 200)
+            while len(rows) < normalized_limit and offset < _ROOT_SCAN_LIMIT:
+                page = _fetch(offset, size)
+                called = _called([row[0] for row in page])
+                rows.extend(row for row in page if row[0] not in called and not row[7])
+                if len(page) < size:
+                    break
+                offset += size
+                size = min(size * 2, 5000)
+    except WorkerDomainError:
         stale_payload = _get_recent_nodes_cached(cache_key, allow_stale=True)
         if stale_payload is not None:
             return stale_payload
-        raise exc
-    except SQLAlchemyTimeoutError as exc:
-        stale_payload = _get_recent_nodes_cached(cache_key, allow_stale=True)
-        if stale_payload is not None:
-            return stale_payload
-        raise WorkerDomainError("runtime_unavailable", "Database temporarily unavailable", endpoint="recent-nodes", reason=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001
-        stale_payload = _get_recent_nodes_cached(cache_key, allow_stale=True)
-        if stale_payload is not None:
-            return stale_payload
-        raise WorkerDomainError("internal_error", "Failed to query recent nodes", endpoint="recent-nodes", reason=str(exc)) from exc
+        raise
 
     def _node_type_name_from_string(raw_node_type: str | None) -> str:
         cleaned = str(raw_node_type or "").strip()
@@ -375,19 +402,7 @@ def _get_recent_nodes(
         parts = [part for part in cleaned.split(".") if part]
         return parts[-1] if parts else cleaned
 
-    pks_list = [row[0] for row in rows if isinstance(row, (list, tuple)) and len(row) >= 1]
-    has_caller_pks = set()
-    if root_only and pks_list:
-        try:
-            with db_access_guard("recent-nodes-callers"):
-                qb_caller = QueryBuilder()
-                qb_caller.append(Node, filters={"id": {"in": pks_list}}, project="id", tag="called")
-                qb_caller.append(Node, with_outgoing="called", edge_filters={"type": {"like": "call%"}}, project="id")
-                for (called_pk, caller_pk) in qb_caller.all():
-                    has_caller_pks.add(called_pk)
-        except Exception:
-            pass
-
+    has_caller_pks: set[int] = set()  # roots were already selected by the query loop above
     non_process_pks = []
     for row in rows:
         if not isinstance(row, (list, tuple)) or len(row) < 8:
